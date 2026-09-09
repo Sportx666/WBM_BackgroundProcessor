@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace WBM_BackgroundProcessor.Models.Paperless_DB
 {
@@ -6,6 +7,7 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
     {
         [Key]
         public string KEYID { get; set; }
+        [Column("SITE.NO")]
         public string SITE_NO { get; set; }
         public string LOAD_NO { get; set; }
         public string SO_NO { get; set; }
@@ -38,7 +40,7 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
         public string MOBILE { get; set; }
         public string RF_PAL_TYPE_ENTERED { get; set; }
         public string RF_PAL_TYPE_COUNTED { get; set; }
-        public string CARRIER_SERVICE_CODE { get; set; }
+        public string? CARRIER_SERVICE_CODE { get; set; }
 
     }
 }

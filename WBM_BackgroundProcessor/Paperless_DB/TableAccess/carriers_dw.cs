@@ -1,5 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using WBM_BackgroundProcessor.Models;
+using WBM_BackgroundProcessor.Models;using wbm_common.NonDatabaseObjects;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 
 namespace WBM_BackgroundProcessor.Paperless_DB
@@ -19,10 +19,9 @@ namespace WBM_BackgroundProcessor.Paperless_DB
             }
             catch (Exception ex)
             {
-                // logger.Error("CARRIERS_DW_ListByKeyID - " + KeyID + ": " + ex);
+                logger.Error("CARRIERS_DW_ListByKeyID - " + KeyID + ": " + ex);
                 return Result.Exception<List<CARRIERS_DW>>("Internal Exception occured");
             }
         }
-
     }
 }

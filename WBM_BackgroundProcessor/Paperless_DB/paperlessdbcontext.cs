@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
+using wbm_common.Paperless_DB_DataObjects;
 
 namespace WBM_BackgroundProcessor.Paperless_DB
 {
@@ -22,14 +23,16 @@ namespace WBM_BackgroundProcessor.Paperless_DB
         public DbSet<CARRIERS_DW> CARRIERS_DW { get; set; }
 
         public DbSet<CUSTOMER_DW> CUSTOMER_DW { get; set; }
+        public DbSet<CONTAINER_DW> CONTAINER_DW { get; set; }
 
         public DbSet<DB_TRANS> DB_TRANS { get; set; }
 
+        public DbSet<PALLET_DW> PALLET_DW { get; set; }
         public DbSet<PICK_DETAIL_DW> PICK_DETAIL_DW { get; set; }
 
         public DbSet<PICK_HEAD_DW> PICK_HEAD_DW { get; set; }
 
-        public DbSet<POSITION_DW> POSTION_DW { get; set; }
+        public DbSet<POSITION_DW> POSITION_DW { get; set; }
 
         public DbSet<PURCH_ORD_PROD_DW> PURCH_ORD_PROD_DW { get; set; }
 
@@ -48,8 +51,10 @@ namespace WBM_BackgroundProcessor.Paperless_DB
         public DbSet<TRIGGER_PURCH_ORD_PROD_DW> TRIGGER_PURCH_ORD_PROD_DW { get; set; }
 
         public DbSet<TRIGGER_STOCK_DW> TRIGGER_STOCK_DW { get; set; }
+        public DbSet<TRIGGER_ZONE_DW> TRIGGER_ZONE_DW { get; set; }
 
         public DbSet<TRUCK_LOAD_DW> TRUCK_LOAD_DW { get; set; }
+        public DbSet<ZONE_DW> ZONE_DW { get; set; }
 
     }
 }

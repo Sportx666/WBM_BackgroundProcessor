@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace WBM_BackgroundProcessor.Models.Paperless_DB
 {
@@ -6,6 +7,7 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
     {
         [Key]
         public string KEYID { get; set; }
+        [Column("SITE.NO")]
         public string SITE_NO { get; set; }
         public string PDETAIL_ID { get; set; }
         public string PROD_NO { get; set; }
@@ -39,6 +41,9 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
         public Nullable<decimal> QTY_CONFIRMED { get; set; }
         public Nullable<decimal> ALLOCATED_QTY { get; set; }
         public string PAL_TYPE { get; set; }
+
+        [NotMapped]
+        public int WBM_StockID { get; set; }
 
     }
 }

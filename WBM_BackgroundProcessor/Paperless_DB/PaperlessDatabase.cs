@@ -1,4 +1,7 @@
-﻿namespace WBM_BackgroundProcessor.Paperless_DB
+﻿using NLog;
+using NLog.Web;
+
+namespace WBM_BackgroundProcessor.Paperless_DB
 {
     public partial class PaperlessDatabase
     {
@@ -13,7 +16,7 @@
             _dbContext = dbContext;
         }
 
-        //private static Logger logger = LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
+        private static Logger logger = LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
 
     }
 }
