@@ -38,7 +38,6 @@ namespace WBM_BackgroundProcessor.Helpers
 
                     currentHeader.InvoiceExFuel += currentDetail.ActualCustomerExtended;
                 }
-
             }
         }
 

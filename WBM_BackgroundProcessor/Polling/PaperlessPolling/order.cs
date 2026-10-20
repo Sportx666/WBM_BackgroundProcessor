@@ -1,17 +1,18 @@
 ﻿using Newtonsoft.Json;
 using NLog;
 using NLog.Web;
+using OfficeOpenXml.Style;
 using WBM_BackgroundProcessor.DataLookups;
 using WBM_BackgroundProcessor.Helpers;
 using WBM_BackgroundProcessor.Models;
-using wbm_common.NonDatabaseObjects;
 using WBM_BackgroundProcessor.Models.DataHolders;
 using WBM_BackgroundProcessor.Models.Excel;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 using wbm_common.DataObjects;
 using wbm_common.NonDatabaseObjects;
-using static WBM_BackgroundProcessor.Models.Excel.ExcelExtraction;
+using wbm_common.NonDatabaseObjects;
 using wbm_common.Paperless_DB_DataObjects;
+using static WBM_BackgroundProcessor.Models.Excel.ExcelExtraction;
 
 namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
 {
@@ -75,6 +76,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
 
             public async Task PollTriggerTable(OrderEnum ordEnm)
             {
+                OrdersThatDidntComplete = new List<(string, string)>();
                 switch (ordEnm)
                 {
                     case OrderEnum.Excel:
@@ -93,10 +95,15 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                             trigger_record.KEYID = pickhead_dw.Value[0].KEYID;
                             await ProcessTPHDW(trigger_record);
                         }
-                        if (OrderCount > 0)
-                            ProduceExcel();
+                        ProduceExcel();
                         break;
                     case OrderEnum.TriggerRows:
+
+                        TRIGGER_PICK_HEAD_DW mtr = new TRIGGER_PICK_HEAD_DW();
+                        mtr.KEYID = "HZLM_02300FFL-2598831";
+                        await ProcessTPHDW(mtr);
+                        ProduceExcel();
+
                         Result<List<TRIGGER_PICK_HEAD_DW>> rtrigger_pickhead_dw = await Paperless_DB.TRIGGER_PICK_HEAD_DW_List();
                         if (rtrigger_pickhead_dw.IsSuccess)
                         {
@@ -151,7 +158,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                                     {
                                         if (await ProcessRecord())
                                         {
-                                            if (!genExcel)
+                                            //if (!genExcel)
                                             {
                                                 if (await Cost_Order())
                                                 {
@@ -159,11 +166,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                                                     SaveFunction();
                                                 }
                                                 else
-                                                    OrdersThatDidntComplete.Add((trigger_record.KEYID, "Order failed to cost"));
+                                                    OrdersThatDidntComplete.Add((trigger_record.KEYID, failedErrorMessage));
                                             }
                                         }
-                                        else
-                                            OrdersThatDidntComplete.Add((trigger_record.KEYID, "Order database rows failed to read from API"));
                                     }
                                 }
                             }
@@ -175,18 +180,18 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                                 }
                             }
                             else
-                                OrdersThatDidntComplete.Add((trigger_record.KEYID, "Order not ready to process"));
+                                OrdersThatDidntComplete.Add((trigger_record.KEYID, failedErrorMessage));
                         }
                         else
                             // here we have already processed a transaction with this order so we're just going to delete it
                             CanDeleteTriggerRecord = true;
                     }
                     else
-                        OrdersThatDidntComplete.Add((trigger_record.KEYID, "Stock Move, dbtrans or pick detail failed to read"));
+                        OrdersThatDidntComplete.Add((trigger_record.KEYID, failedErrorMessage));
                 }
                 else
                 {
-                    OrdersThatDidntComplete.Add((trigger_record.KEYID, "Site or Owner Error"));
+                    OrdersThatDidntComplete.Add((trigger_record.KEYID, failedErrorMessage));
                     CanProcessTriggerRecord = false;
                 }
 
@@ -297,15 +302,22 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     {
                         // We won't use the new address in order processing; this is being created so that staff can then populate
                         // with any processing flags needed, and will be used for future orders.
-                        CreateNewCustomerAddress();
+                        if (!CreateNewCustomerAddress())
+                            return false;
                     }
 
-                    return CurrentOdh.ProcessOrder();
-
+                    if (CurrentOdh.ProcessOrder())
+                        return true;
+                    else
+                    {
+                        OrdersThatDidntComplete.Add((trigger_record.KEYID, CurrentOdh.failedErrorMessage));
+                        return false;
+                    }
                 }
-                else
-                    return false;
+                OrdersThatDidntComplete.Add((trigger_record.KEYID, "Order database rows failed to read from API, " + failedErrorMessage));
+                return false;
             }
+            private string failedErrorMessage = "";
 
             private async Task<bool> GatherData()
             {
@@ -335,12 +347,6 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     if (!await List_ActionRateCode())
                         rtnVal = false;
 
-                    if (!await List_ProcessingRule())
-                        rtnVal = false;
-
-                    if (!await List_RateCollection())
-                        rtnVal = false;
-
                     if (!await List_RateCode())
                         rtnVal = false;
 
@@ -350,6 +356,12 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     if (rtnVal)
                         LoadOwnerDataRequired = false;
                 }
+
+                if (!await List_ProcessingRule())
+                    rtnVal = false;
+
+                if (!await List_RateCollection())
+                    rtnVal = false;
 
                 if (!await Get_ZoneProcessing())
                     rtnVal = false;
@@ -393,9 +405,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 pickdetail_dw = await Paperless_DB.PICK_DETAIL_DW_ListByKeyIDStartsWith(trigger_record.KEYID);
 
                 if (pickdetail_dw.IsSuccess && CurrentOdh != null)
-                {
                     CurrentOdh.ListPickDetailDW = pickdetail_dw.Value;
-                }
 
                 return pickdetail_dw.IsSuccess;
             }
@@ -407,9 +417,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 stockmove_dw = await Paperless_DB.STOCK_MOVE_DW_ListByInvNoOrOrdNo(pickhead_dw.Value[0].PHEAD_ID + "#");
 
                 if (stockmove_dw.IsSuccess && CurrentOdh != null)
-                {
                     CurrentOdh.ListStockMoveDW = stockmove_dw.Value;
-                }
 
                 return stockmove_dw.IsSuccess;
             }
@@ -421,9 +429,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 dbTrans = await Paperless_DB.DB_TRANS_ListByReference(pickhead_dw.Value[0].PHEAD_ID);
 
                 if (dbTrans.IsSuccess && CurrentOdh != null)
-                {
                     CurrentOdh.ListDBTrans = dbTrans.Value;
-                }
 
                 return dbTrans.IsSuccess;
             }
@@ -435,9 +441,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 truck_load_dw = await Paperless_DB.TRUCK_LOAD_DW_ListByLoad_No(CurrentOdh.PickHeadDW.LOAD_NO);
 
                 if (truck_load_dw.IsSuccess)
-                {
                     CurrentOdh.ListTruckLoadDW = truck_load_dw.Value;
-                }
 
                 return truck_load_dw.IsSuccess;
             }
@@ -455,7 +459,8 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockSearch");
                 if (response == null)
                 {
-                    logger.Error("Order StockSearch returned no response");
+                    failedErrorMessage = "Order StockSearch returned no response";
+                    logger.Error(failedErrorMessage);
                     return false;
                 }
                 else
@@ -470,13 +475,15 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                         if (CurrentOdh.ListSKU.Count() != CurrentOdh.ListSKU.Count())
                         {
                             var missingSKUs = CurrentOdh.ListSKU.Except(CurrentOdh.ListStock.Select(x => x.ProductCode)).ToList();
-                            logger.Error("Order StockSearch missing SKUs: " + string.Join(", ", missingSKUs));
+                            failedErrorMessage = "Order StockSearch missing SKUs: " + string.Join(", ", missingSKUs);
+                            logger.Error(failedErrorMessage);
                             return false;
                         }
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Order List_WBM_Stock " + ex);
+                        failedErrorMessage = "Order List_WBM_Stock " + ex;
+                        logger.Error(failedErrorMessage);
                         return false;
                     }
                 }
@@ -494,7 +501,8 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "ActionRateCodeSearch");
                 if (response == null)
                 {
-                    logger.Error("Order ActionRateCode returned no response");
+                    failedErrorMessage = "Order ActionRateCode returned no response";
+                    logger.Error(failedErrorMessage);
                     return false;
                 }
                 else
@@ -506,7 +514,8 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Owner List_ActionRateCode " + ex);
+                        failedErrorMessage = "Order List_ActionRateCode " + ex;
+                        logger.Error(failedErrorMessage);
                         return false;
                     }
                 }
@@ -523,7 +532,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "CustomerAddressDefaultSearch");
                 if (response == null)
                 {
-                    logger.Error("Order CustomerAddressDefault returned no response");
+                    failedErrorMessage = "Order CustomerAddressDefault returned no response" ;
+                    logger.Error(failedErrorMessage);
+
                     return false;
                 }
                 else
@@ -537,7 +548,8 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Order ListCustomerAddressDefault " + ex);
+                        failedErrorMessage = "Order ListCustomerAddressDefault " + ex;
+                        logger.Error(failedErrorMessage);
                         return false;
                     }
                 }
@@ -554,7 +566,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "PriorityOrderSearch");
                 if (response == null)
                 {
-                    logger.Error("Order PriorityOrder returned no response");
+                    failedErrorMessage = "Order PriorityOrder returned no response";
+                    logger.Error(failedErrorMessage);
+
                     return false;
                 }
                 else
@@ -566,7 +580,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Order ListPriorityOrder " + ex);
+                        failedErrorMessage = "Order ListPriorityOrder " + ex;
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                 }
@@ -583,7 +599,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "ConnoteFeeSearch");
                 if (response == null)
                 {
-                    logger.Error("Order ConnoteFee returned no response");
+                    failedErrorMessage = "Order ConnoteFee returned no response";
+                    logger.Error(failedErrorMessage);
+
                     return false;
                 }
                 else
@@ -596,25 +614,40 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Order ListPriorityOrder " + ex);
+                        failedErrorMessage = "Order ListConnoteFee " + ex;
+                        logger.Error(failedErrorMessage);
                         return false;
                     }
                 }
                 return true;
             }
 
+            private int lastRtCllDfnID = 0;
             private async Task<bool> List_RateCollection()
             {
+                if (CurrentOwner_dbRow == null)
+                    return false;
                 RateCollection.Search so = new RateCollection.Search();
-                so.ListRateCollectionDefnID = new List<int> { 1 };
+                so.ListRateCollectionDefnID = new List<int> { CurrentOwner_dbRow.CurrentRateCollectionDefnID };
+
+                // Check for a change in RateCollectionDefnID based on dates.
+
+                if (pickhead_dw.Value[0].DEL_DATE != null && CurrentOwner_dbRow.DateOfChange != null && pickhead_dw.Value[0].DEL_DATE > CurrentOwner_dbRow.DateOfChange)
+                    so.ListRateCollectionDefnID = new List<int> { CurrentOwner_dbRow.NewRateCollectionDefnID };
                 so.SearchMode = RateCollection.Search.SearchModeType.SingleRateCollectionDefnID;
+
+                // If the colection we already have are the same no need to fetch again
+
+                if (lastRtCllDfnID == so.ListRateCollectionDefnID[0])
+                    return true;
 
                 string jsonString = Newtonsoft.Json.JsonConvert.SerializeObject(so);
 
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "RateCollectionSearch");
                 if (response == null)
                 {
-                    logger.Error("Order RateCollection returned no response");
+                    failedErrorMessage = "Order RateCollection returned no response";
+                    logger.Error(failedErrorMessage);
                     return false;
                 }
                 else
@@ -622,10 +655,13 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     try
                     {
                         ListRateCollection = JsonConvert.DeserializeObject<List<RateCollection.dbRow>>(response);
+                        lastRtCllDfnID = so.ListRateCollectionDefnID[0];
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Owner List_RateCollection " + ex);
+                        failedErrorMessage = "Order List_RateCollection " + ex;
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                 }
@@ -642,7 +678,8 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "RateCodeSearch");
                 if (response == null)
                 {
-                    logger.Error("Order RateCode returned no response");
+                    failedErrorMessage = "Order RateCode returned no response";
+                    logger.Error(failedErrorMessage);
                     return false;
                 }
                 else
@@ -653,7 +690,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Owner List_RateCode " + ex);
+                        failedErrorMessage = "Order List_RateCode " + ex;
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                 }
@@ -670,7 +709,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "TableRateSearch");
                 if (response == null)
                 {
-                    logger.Error("Order TableRate returned no response");
+                    failedErrorMessage = "Order TableRate returned no response";
+                    logger.Error(failedErrorMessage);
+
                     return false;
                 }
                 else
@@ -681,7 +722,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Owner TableRate " + ex);
+                        failedErrorMessage = "Order List_TableRate " + ex;
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                 }
@@ -693,14 +736,18 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 PaperlessTransactionXref.dbRow PaperlessTransactionXrefRow = null;
                 PaperlessTransactionXref.Search so = new PaperlessTransactionXref.Search();
                 so.SearchMode = PaperlessTransactionXref.Search.SearchModeType.PaperlessKeyID;
-                so.PaperlessKeyID = trigger_record.KEYID;
+                so.PaperlessKeyID = pickhead_dw.Value[0].PHEAD_ID;
+                if (so.PaperlessKeyID.Length > 5)
+                    so.PaperlessKeyID = so.PaperlessKeyID.Substring(5, so.PaperlessKeyID.Length - 5);
 
                 string jsonString = Newtonsoft.Json.JsonConvert.SerializeObject(so);
 
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "PaperlessTransactionXrefSearch");
                 if (response == null)
                 {
-                    logger.Error("Order PaperlessTransactionXref returned no response");
+                    failedErrorMessage = "Order PaperlessTrasactionXref returned no response";
+                    logger.Error(failedErrorMessage);
+
                     return false;
                 }
                 else
@@ -714,7 +761,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Order Get_PaperlessTransactionXref " + ex);
+                        failedErrorMessage = "Order Get_PaperlessTransactionXref " + ex;
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                 }
@@ -742,7 +791,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     response = CAPI.FetchFromAPIWithKeyID(jsonString, "ZoneProcessingSearch");
                     if (response == null)
                     {
-                        logger.Error("Order ZoneProcessing returned no response");
+                        failedErrorMessage = "Order ZoneProcessing returned no response";
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                     else
@@ -759,7 +810,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                         }
                         catch (Exception ex)
                         {
-                            logger.Error("Order Get_ZoneProcessing " + ex);
+                            failedErrorMessage = "Order Get_ZoneProcessing " + ex;
+                            logger.Error(failedErrorMessage);
+
                             return false;
                         }
                     }
@@ -794,7 +847,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     response = CAPI.FetchFromAPIWithKeyID(jsonString, "CustomerAddressSearch");
                     if (response == null)
                     {
-                        logger.Error("Order CustomerAddress returned sno response");
+                        failedErrorMessage = "Order CustomerAddress returned no response";
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                     else
@@ -808,7 +863,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                         }
                         catch (Exception ex)
                         {
-                            logger.Error("Order ListCustomerAddress " + ex);
+                            failedErrorMessage = "Order ListCustomerAddress " + ex;
+                            logger.Error(failedErrorMessage);
+
                             return false;
                         }
                     }
@@ -876,41 +933,45 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 return CAPI.SaveToAPI(CurrentCustAdd, "/api/CustomerAddressSave");
             }
 
+            private int lastPrDfnID = 0;
             private async Task<bool> List_ProcessingRule()
             {
-                if (CurrentOwner_dbRow != null)
+                if (CurrentOwner_dbRow == null)
+                    return false;
+                ProcessingRule.Search so = new ProcessingRule.Search();
+                so.SearchMode = ProcessingRule.Search.SearchModeType.ProcessingRuleDefnID;
+                so.ProcessingRuleDefnID = CurrentOwner_dbRow.CurrentProcessingRuleDefnID;
+                if (pickhead_dw.Value[0].DEL_DATE != null && CurrentOwner_dbRow.DateOfChange != null && pickhead_dw.Value[0].DEL_DATE > CurrentOwner_dbRow.DateOfChange)
+                    so.ProcessingRuleDefnID = CurrentOwner_dbRow.NewProcessingRuleDefnID;
+                if (lastPrDfnID == so.ProcessingRuleDefnID)
+                    return true;
+                string jsonString = Newtonsoft.Json.JsonConvert.SerializeObject(so);
+
+                response = CAPI.FetchFromAPIWithKeyID(jsonString, "ProcessingRuleSearch");
+                if (response == null)
                 {
-                    ProcessingRule.Search so = new ProcessingRule.Search();
-                    so.SearchMode = ProcessingRule.Search.SearchModeType.ProcessingRuleDefnID;
-                    so.ProcessingRuleDefnID = CurrentOwner_dbRow.CurrentProcessingRuleDefnID;
-
-                    string jsonString = Newtonsoft.Json.JsonConvert.SerializeObject(so);
-
-                    response = CAPI.FetchFromAPIWithKeyID(jsonString, "ProcessingRuleSearch");
-                    if (response == null)
+                    failedErrorMessage = "Order ProcessingRuleSearch returned no response";
+                    logger.Error("Order ProcessingRuleSearch returned no response");
+                    return false;
+                }
+                else
+                {
+                    try
                     {
-                        logger.Error("Order ProcessingRuleSearch returned no response");
+                        ListProcessingRule = JsonConvert.DeserializeObject<List<ProcessingRule.dbRow>>(response);
+
+                        // Only want paperless order process
+                        ListProcessingRule = ListProcessingRule.Where(pr => pr.ProcessCategoryID == 3).OrderBy(pr => pr.SortOrder).ToList();
+                        lastPrDfnID = so.ProcessingRuleDefnID;
+                    }
+                    catch (Exception ex)
+                    {
+                        failedErrorMessage = "Order List_ProcessingRule " + ex;
+                        logger.Error("Order List_ProcessingRule " + ex);
                         return false;
                     }
-                    else
-                    {
-                        try
-                        {
-                            ListProcessingRule = JsonConvert.DeserializeObject<List<ProcessingRule.dbRow>>(response);
-
-                            // Only want paperless order process
-                            ListProcessingRule = ListProcessingRule.Where(pr => pr.ProcessCategoryID == 3).OrderBy(pr => pr.SortOrder).ToList();
-
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.Error("Order ListPriorityOrder " + ex);
-                            return false;
-                        }
-                    }
-                    return true;
                 }
-                return false;
+                return true;
             }
 
             private async Task<bool> List_Carrier()
@@ -923,7 +984,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "CarrierSearch");
                 if (response == null)
                 {
-                    logger.Error("Order Carrier returned no response");
+                    failedErrorMessage = "Order Carrier returned no response";
+                    logger.Error(failedErrorMessage);
+
                     return false;
                 }
                 else
@@ -934,7 +997,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("Order ListCarrier" + ex);
+                        failedErrorMessage = "Order ListCarrier " + ex;
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                 }
@@ -944,11 +1009,11 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
             private async Task<bool> Cost_Order()
             {
                 Transaction_Costing tc = new Transaction_Costing();
-                tc.thRow = CurrentOdh.TransactionHeader;
+                tc.thRow = CurrentOdh.TransactionHolder.TransactionHeader_Row;
                 tc.ListTransactionDetail_Costing = new List<Transaction_Costing.TransactionDetail_Costing>();
 
                 Transaction_Costing.TransactionDetail_Costing tdc;
-                foreach (TransactionDetail.dbRow td in CurrentOdh.ListTransactionDetail)
+                foreach (TransactionDetail.dbRow td in CurrentOdh.TransactionHolder.ListTransactionDetail)
                 {
                     tdc = new Transaction_Costing.TransactionDetail_Costing();
                     tdc.tdRow = td;
@@ -963,7 +1028,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "TransactionCostingCost");
                 if (response == null)
                 {
-                    logger.Error("TransactionCostingCost returned no response");
+                    failedErrorMessage = "Order TransactionCostingCost returned no response";
+                    logger.Error(failedErrorMessage);
+
                     return false;
                 }
                 else
@@ -974,7 +1041,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     catch (Exception ex)
                     {
-                        logger.Error("TransactionCostingCost deserialise " + ex);
+                        failedErrorMessage = "Order TransactionCostingCost deserialise " + ex;
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
 
@@ -983,7 +1052,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     {
                         if (returntch.ListTransactionCosting[0].CostedOK == false)
                         {
-                            logger.Error("TransactionCostingCost returned CostedOK = false");
+                            failedErrorMessage = "Order TransactionCostingCost returned CostedOK = false";
+                            logger.Error(failedErrorMessage);
+
                             return false;
                         }
                         else
@@ -993,7 +1064,9 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                     else
                     {
-                        logger.Error("TransactionCostingCost returned no costing records");
+                        failedErrorMessage = "Order TransactionCostingCost returned no costing records";
+                        logger.Error(failedErrorMessage);
+
                         return false;
                     }
                 }
@@ -1002,40 +1075,28 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
 
             private void ProcessReturnCosting(wbm_common.NonDatabaseObjects.Transaction_Costing tc)
             {
-                CurrentOdh.TransactionHeader = tc.thRow;
-                CurrentOdh.ListTransactionDetail.Clear();
+                CurrentOdh.TransactionHolder.TransactionHeader_Row = tc.thRow;
+                CurrentOdh.TransactionHolder.ListTransactionDetail.Clear();
                 foreach (Transaction_Costing.TransactionDetail_Costing tdc in tc.ListTransactionDetail_Costing)
                 {
                     TransactionDetail.dbRow td = tdc.tdRow;
-                    CurrentOdh.ListTransactionDetail.Add(td);
+                    CurrentOdh.TransactionHolder.ListTransactionDetail.Add(td);
                 }
+                CurrentOdh.TransactionHolder.TransactionHeader_Row.InvoiceExGST = CurrentOdh.TransactionHolder.TransactionHeader_Row.InvoiceExFuel + CurrentOdh.TransactionHolder.TransactionHeader_Row.InvoiceFuel;
             }
 
             private bool SaveFunction()
             {
-                ListTrans.Add(new WBM_BackgroundProcessor.Models.Excel.TransExcel.Trans(CurrentOdh.TransactionHeader, CurrentOdh.ListTransactionDetail));
+                ListTrans.Add(new WBM_BackgroundProcessor.Models.Excel.TransExcel.Trans(CurrentOdh.TransactionHolder.TransactionHeader_Row, CurrentOdh.TransactionHolder.ListTransactionDetail));
                 OrderCount++;
 
                 try
                 {
-                    //if (CurrentCarAdd.dbRow_instance.ID == 0)
-                    //{
-                    //    SaveAPIFunctionCall();
-                    //}
-                    //else if (isCarrierDifferent())
-                    //{
-                    //    // Only update if something has changed to avoid unnecessary API calls
-                    //    SaveAPIFunctionCall();
-                    //}
-                    //else
-                    //{
-                    //    // No changes, so can delete trigger record but don't need to call API
-                    //    CanDeleteTriggerRecord = true;
-                    //}
+                    SaveAPIFunctionCall();
                 }
                 catch (Exception ex)
                 {
-                    logger.Error("Carrier SaveFunction " + ex);
+                    logger.Error("Order SaveFunction " + ex);
                     return false;
                 }
 
@@ -1050,6 +1111,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
 
             private async Task<bool> ReadRecord()
             {
+                if (!genExcel)
                 pickhead_dw = await ReadPickHeadFromDB();
                 if (pickhead_dw.IsSuccess && pickhead_dw.Value.Count() == 0)
                 {
@@ -1070,13 +1132,13 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
 
             private void SaveAPIFunctionCall()
             {
-                //CurrentCarAdd.CalledFrom = GS.selfName;
-                //CurrentCarAdd.ChangedTime = now;
+                CurrentOdh.TransactionHolder.CalledFrom = GS.selfName;
+                CurrentOdh.TransactionHolder.ChangedTime = now;
 
-                //if (CAPI.SaveToAPI(CurrentCarAdd, "/api/CarrierSave"))
-                //    CanDeleteTriggerRecord = true;
-                //else
-                //    CanDeleteTriggerRecord = false; // error 
+                if (CAPI.SaveToAPI(CurrentOdh.TransactionHolder, "/api/TransactionHolderSave"))
+                    CanDeleteTriggerRecord = true;
+                else
+                    CanDeleteTriggerRecord = false; // error 
             }
 
             private bool ReadFromAPI()
@@ -1150,6 +1212,8 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                                 EmailHelper.SendEmail(trigger_record.KEYID, Site, EmailHelper.IssueType.Site, "Order");
                             else if (OwnerFS == wbm_api.FieldState.NotFound)
                                 EmailHelper.SendEmail(trigger_record.KEYID, Owner, EmailHelper.IssueType.Owner, "Order");
+
+                            failedErrorMessage = "site or owner not found";
                             return false;
                         }
                         else if (SiteFS == wbm_api.FieldState.Inactive || OwnerFS == wbm_api.FieldState.Inactive)
@@ -1158,6 +1222,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                             CanDeleteTriggerRecord = true;
                             PreviousCanDeleteTriggerRecord = true;
                             PreviousCanProcessTriggerRecord = false;
+                            failedErrorMessage = "Site or OWner is inactive";
                             return false;
                         }
                         else
@@ -1172,6 +1237,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 else
                     EmailHelper.SendEmail(trigger_record.KEYID, "", EmailHelper.IssueType.Format, "Order");
 
+                failedErrorMessage = "CanProcess failed to end of routine";
                 return false;
             }
 

@@ -23,5 +23,25 @@ namespace WBM_BackgroundProcessor.Paperless_DB
                 return Result.Exception<List<PALLET_DW>>("Internal Exception occured");
             }
         }
+
+        public async Task<Result<List<WBM_PALLET_DW_ASATINSERT>>> WBM_PALLET_DW_ASASINSERT_ListByContNum(List<string> ContNums)
+        {
+            try
+            {
+                List<WBM_PALLET_DW_ASATINSERT> liststockmove = null;
+                if (ContNums.Count() > 0)
+                    liststockmove = await _dbContext.WBM_PALLET_DW_ASATINSERT.AsNoTracking().Where(x => ContNums.Contains(x.CONTAINER_NO)).ToListAsync();
+
+                if (liststockmove == null)
+                    return Result.Success<List<WBM_PALLET_DW_ASATINSERT>>(new List<WBM_PALLET_DW_ASATINSERT>());
+                else
+                    return Result.Success<List<WBM_PALLET_DW_ASATINSERT>>(liststockmove);
+            }
+            catch (Exception ex)
+            {
+                logger.Error("WBM_PALLET_DW_ASASINSERT_ListByContNum - " + String.Join(",", ContNums) + ": " + ex);
+                return Result.Exception<List<WBM_PALLET_DW_ASATINSERT>>("Internal Exception occured");
+            }
+        }
     }
 }

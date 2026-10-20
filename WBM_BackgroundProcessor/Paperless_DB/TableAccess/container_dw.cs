@@ -10,7 +10,9 @@ namespace WBM_BackgroundProcessor.Paperless_DB
         {
             try
             {
-                CONTAINER_DW container = await _dbContext.CONTAINER_DW.AsNoTracking().FirstOrDefaultAsync(x => conts.Contains(x.CONTAINER));
+                CONTAINER_DW container = null;
+                if (conts.Count() > 0)
+                container = await _dbContext.CONTAINER_DW.AsNoTracking().FirstOrDefaultAsync(x => conts.Contains(x.CONTAINER));
 
                 if (container == null)
                     return Result.Success<List<CONTAINER_DW>>(new List<CONTAINER_DW>());

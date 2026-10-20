@@ -10,6 +10,7 @@ using WBM_BackgroundProcessor.DataLookups;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 using WBM_BackgroundProcessor.Polling;
 using wbm_common.DataObjects;
+using wbm_common.NonDatabaseObjects;
 using wbm_common.Paperless_DB_DataObjects;
 using static System.Runtime.CompilerServices.RuntimeHelpers;
 
@@ -20,8 +21,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         private static Logger logger = LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
         public ReceiptDataHolder(int CompanyID, int SiteID, int OwnerID)
         {
-            TransactionHeader = new TransactionHeader.dbRow();
-            ListTransactionDetail = new List<TransactionDetail.dbRow>();
             DictActionRateCodeStat = new Dictionary<string, ActionRateCodeStat>();
 
             this.CompanyID = CompanyID;
@@ -70,6 +69,8 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         // Paperless Datatables
 
         public List<PURCH_ORD_PROD_DW> ListPurchOrdProdDWs { get; set; }
+        public PURCH_ORD_PROD_DW PurchOrdProdDWWithDate { get; set; }
+
 
         private List<STOCK_MOVE_DW> _ListStockMoveDW;
 
@@ -87,6 +88,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         public List<string> ListPALNO { get; set; }
 
         public List<DB_TRANS> ListDBTrans { get; set; }
+        public List<WBM_PALLET_DW_ASATINSERT> ListPalletAsInsert { get; set; }
         public List<CONTAINER_DW> ListDBConts { get; set; }
         public List<string> ListConts { get; set; }
 
@@ -104,9 +106,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
 
         public List<Stock.dbRow> ListStock { get; set; }
 
-        public TransactionHeader.dbRow TransactionHeader { get; set; }
-
-        public List<TransactionDetail.dbRow> ListTransactionDetail { get; set; }
+        public TransactionHolder TransactionHolder { get; set; }
 
         public List<RateCollection.dbRow> ListRateCollection { get; set; }
 
@@ -129,6 +129,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         private int UnitTypeID_Pallet = 2;
         private int ActionTypeID_Putaway = 2;
         private int ActionTypeID_Loadin = 3;
+        private int ActionTypeID_HandleIn = 4;
 
         public Dictionary<string, ActionRateCodeStat> DictActionRateCodeStat { get; set; }
 
@@ -136,10 +137,23 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         public string ConSize { get; set; }
         public bool IsConLoose { get; set; }
         public bool IsReturn { get; set; }
+        public bool IsContainer { get; set; }
+
+        public string failedErrorMessage = "";
+
+        private int PalletCount_CheckIn = 0;
+        private int PalletCount_PutAway = 0;
+        private int PalletCount_FulLRep = 0;
+        private int Calculated_Wraps = 0;
 
         // Processing
 
         #region processing
+
+        public void setPurchOrdProdDWWithDate()
+        {
+            PurchOrdProdDWWithDate = ListPurchOrdProdDWs.FirstOrDefault(x => x.DATE_RECV != null && x.PO_CLR_LOAD_FLG == "U");
+        }
 
         public void SetIsReturn()
         {
@@ -155,15 +169,25 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         public void SetConSize()
         {
             if (ListPurchOrdProdDWs.Any(x => x.RECP_TYPE == "CO"))
+            {
+                IsContainer = true;
                 ConSize = "40";
-            // overwrite default if we find a size
-            if (ListDBConts.Any(x => x.CONT_SIZE != null))
-                ConSize = ListDBConts.Where(x => x.CONT_SIZE != null).First().CONT_SIZE;
+
+                // overwrite default if we find a size
+                //if (ListDBConts.Any(x => x.CONT_SIZE != null))
+                //    ConSize = ListDBConts.Where(x => x.CONT_SIZE != null).First().CONT_SIZE;
+            }
+
+            // new version, we get from ListPalletAsInsert
+            if (ListPalletAsInsert.Any(x => x.CONTAINER_SIZE != null))
+                ConSize = ListPalletAsInsert.Where(x => x.CONTAINER_SIZE != null).First().CONTAINER_SIZE;
         }
 
         public void SetIsConLoose()
         {
-            IsConLoose = ListPurchOrdProdDWs.Any(x => x.UNLOAD_TYPE != null && x.UNLOAD_TYPE != "");
+            //IsConLoose = ListPurchOrdProdDWs.Any(x => x.UNLOAD_TYPE != null && x.UNLOAD_TYPE != "");
+            // new use ListPalletAsInsert
+            IsConLoose = ListPalletAsInsert.Any(x => x.UNLOAD_TYPE != null && x.UNLOAD_TYPE != "");
         }
 
         public void SetListPALNO()
@@ -190,6 +214,25 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                 List<string> custnos = ListStockMoveDW.Select(sm => sm.CUST_NO).Where(x => x != null && x != "").Distinct().ToList();
                 if (custnos.Count() > 0)
                     CustNo = custnos.First();
+            }
+        }
+
+        public void setPalletCount()
+        {
+            foreach (STOCK_MOVE_DW smRow in ListStockMoveDW)
+            {
+                switch (smRow.MOVE_TYPE)
+                {
+                    case "CHECK.IN":
+                        PalletCount_CheckIn++;
+                        break;
+                    case "PUT.AWAY":
+                        PalletCount_PutAway++;
+                        break;
+                    case "FULL.REP":
+                        PalletCount_FulLRep++;
+                        break;
+                }
             }
         }
 
@@ -238,7 +281,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             if (ConSize != null && ConSize != "")
             {
                 // this will return whatever is first of matching Owner + Site, Site, Owner, generic owner + site
-                ContainerLift.dbRow ConLiftDefaultLifts = ListContainerLift.Where(x => (x.SiteID == 0 || x.SiteID == SiteID) 
+                ContainerLift.dbRow ConLiftDefaultLifts = ListContainerLift.Where(x => (x.SiteID == 0 || x.SiteID == SiteID)
                                                                     && (x.OwnerID == 0 || x.OwnerID == OwnerID)).OrderBy(x => x.OwnerID).ThenBy(x => x.SiteID).LastOrDefault();
                 if (ConLiftDefaultLifts != null && ConLiftDefaultLifts.DefaultNumberOfLifts != 0)
                     CreateTransactionDetailPreProcess(29, "Each", ConLiftDefaultLifts.DefaultNumberOfLifts);
@@ -274,7 +317,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                                                                     && (x.OwnerID == 0 || x.OwnerID == OwnerID)).OrderBy(x => x.OwnerID).ThenBy(x => x.SiteID).LastOrDefault();
                 int numUnderRule = 0;
                 int numOverRule = 0;
-                foreach(STOCK_MOVE_DW StkMv in ListStockMoveDW)//where unload?
+                foreach (STOCK_MOVE_DW StkMv in ListStockMoveDW)//where unload?
                 {
                     Stock.dbRow Stk = ListStock.FirstOrDefault(x => x.ProductCode == StkMv.PRODUCT_CODE);
                     if (Stk != null)
@@ -286,7 +329,8 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                     }
                     else
                     {
-                        logger.Error("ReceiptDataHolder REC_CONTHEAVYLIFT: Stock move not found in stock " + StkMv.PRODUCT_CODE + ", " + UnCutID);
+                        failedErrorMessage = "ReceiptDataHolder REC_CONTHEAVYLIFT: Stock move not found in stock " + StkMv.PRODUCT_CODE + ", " + UnCutID;
+                        logger.Error(failedErrorMessage);
                         return false;
                     }
                 }
@@ -298,13 +342,44 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         }
         public void REC_WRAPIN()
         {
-            //ReceiptDataHolder.WrapIn_Pal
-            if (TotalCheckIns > TotalPutawaysAndReplns) // this means we repackaged X number of checkins and wrapped into Y number of putaways so charge Y
-                CreateTransactionDetailPreProcess(25, "Each", TotalPutawaysAndReplns);
-            else if (TotalCheckIns < TotalPutawaysAndReplns)  // this means we unpacked all and put into Y putaways, charge Y
-                CreateTransactionDetailPreProcess(25, "Each", TotalPutawaysAndReplns);
-            // equal means we did nothing
+
+            if (IsConLoose)
+            {
+                // This is the number of pallets put away
+                if (PalletCount_PutAway > 0)
+                {
+                    Calculated_Wraps = PalletCount_PutAway;
+                }
+            }
+            else
+            {
+                // This is either a palletised container or a truck unload
+                // Compare the CHECK.IN quantity vs the PUT.AWAY and FULL.REP quantity and if different, charge the PUT.AWAY
+                if (PalletCount_CheckIn != (PalletCount_PutAway + PalletCount_FulLRep))
+                {
+                    Calculated_Wraps = PalletCount_PutAway;
+                }
+            }
+
+            if (Calculated_Wraps > 0)
+                CreateTransactionDetailPreProcess(25, "Each", Calculated_Wraps);
         }
+
+        public void REC_CAPIN_PAL()
+        {
+            // Same logic as wraps, this is for a pallet cap
+            if (Calculated_Wraps > 0)
+                CreateTransactionDetailPreProcess(54, "Each", Calculated_Wraps);
+        }
+
+        public void REC_LINERIN_PAL()
+        {
+            // Same logic as wraps, this is for a pallet liner
+
+            if (Calculated_Wraps > 0)
+                CreateTransactionDetailPreProcess(53, "Each", Calculated_Wraps);
+        }
+
         public void REC_DEVANPALLET()
         {
             //ReceiptDataHolder.DevanPallet_ChargeCode; quantity is LOADIN_Pallet
@@ -328,24 +403,13 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         }
         public void REC_HANDLEIN()
         {
-            //ReceiptDataHolder.HandleIn.ListHandleIn
-            /*foreach (ActionRateCodeStat arc_stat in DictActionRateCodeStat.Values)
+            foreach (ActionRateCodeStat arc_stat in DictActionRateCodeStat.Values)
             {
-                //if (arc_stat.ActionTypeID == ActionTypeID_HandleIn) //seems to only be handleout not handle in in the db
+                if (arc_stat.ActionTypeID == ActionTypeID_HandleIn)
                 {
-                    string ChargeDescription = "Each";
-                    string FullDescription = "Pick carton";
-
-                    if (arc_stat.UnitTypeID == 2)
-                        FullDescription = "Pick full pallet";
-
-                    CreateTransactionDetail(0, arc_stat.ActionChargeCode, ChargeDescription, FullDescription, arc_stat.Quantity);
+                    CreateTransactionDetailPreProcess(arc_stat.ActionChargeCode, "Each", arc_stat.Quantity);
                 }
-            }*/
-            //if (!IsContainer)
-            //    if (putaway > palletunloaded)
-            //        if (ListPickDetailDW.Select(x => x.PROD_NO))
-                        //CreateTransactionDetail(0, "", "Each", "Handle In Reciept", 1);
+            }
         }
         public void REC_PUTAWAY()
         {
@@ -361,17 +425,35 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         {
             //ReceiptDataHolder.MinReceipt
             //if (DevanLoose_ChargeCode < DevanPallet_ChargeCode)
-                //CreateTransactionDetail(40, "", "Each", "Minimum Receipt", 1);
+            //CreateTransactionDetail(40, "", "Each", "Minimum Receipt", 1);
         }
 
         public bool ProcessReceipt()
         {
+            if (TransactionHolder == null || TransactionHolder.TransactionHeader_Row == null)
+            {
+                TransactionHolder = new TransactionHolder();
+                TransactionHolder.TransactionHeader_Row = new TransactionHeader.dbRow();
             CreateTransactionHeader();
+            }
+            else
+            {
+                TransactionHolder.TransactionHeader_Row.InvoiceExFuel = 0;
+                TransactionHolder.TransactionHeader_Row.InvoiceExGST = 0;
+                TransactionHolder.TransactionHeader_Row.InvoiceFuel = 0;
+                TransactionHolder.TransactionHeader_Row.InvoiceGST = 0;
+            }
+            if (TransactionHolder.ListTransactionDetail == null)
+                TransactionHolder.ListTransactionDetail = new List<TransactionDetail.dbRow>();
+            if (TransactionHolder.PaperlessTransactionXref_Row == null)
+                CreatePaperlessTransactionXRef();
             SetIsReturn();
             SetIsEDI();
             SetConSize();
             SetIsConLoose();
+            setPalletCount();
             Process_Stock();
+            Process_dbTrans();
 
             foreach (ProcessingRule.dbRow pr in ListProcessingRule)
             {
@@ -434,6 +516,14 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                         // REC_MINRECEIPT
                         REC_MINRECEIPT();
                         break;
+                    case 31:
+                        // REC_CAPIN_PAL
+                        REC_CAPIN_PAL();
+                        break;
+                    case 32:
+                        // REC_LINERIN_PAL
+                        REC_LINERIN_PAL();
+                        break;
                     default:
                         // should not be here...
                         break;
@@ -441,7 +531,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             }
             if (addDebug)
                 AddDebugInfo();
-            TransactionHeader.LastAmendedMethod = debugString.ToString();
+            TransactionHolder.TransactionHeader_Row.LastAmendedMethod = debugString.ToString();
             return true;
         }
 
@@ -449,9 +539,9 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         public bool addDebug = false;
         public void AddDebugInfo()
         {
-            debugString.Append("Sup Name: " + ListPurchOrdProdDWs[0].SUPP_NAME + " ");
+            debugString.Append("Sup Name: " + PurchOrdProdDWWithDate.SUPP_NAME + " ");
 
-            debugString.Append("Load Flag: " + ListPurchOrdProdDWs[0].PO_CLR_LOAD_FLG + ", ");
+            debugString.Append("Load Flag: " + PurchOrdProdDWWithDate.PO_CLR_LOAD_FLG + ", ");
 
             debugString.Append("ConSize: " + ConSize + ", ");
             debugString.Append("IsEDI: " + IsEDI.ToString() + ", ");
@@ -489,24 +579,43 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         }
         public void CreateTransactionHeader()
         {
-            TransactionHeader.CompanyID = CompanyID;
-            TransactionHeader.OwnerID = OwnerID;
-            TransactionHeader.SiteID = SiteID;
-            TransactionHeader.TransactionSourceID = 1; // Paperless
-            TransactionHeader.TransactionDateTime = Convert.ToDateTime(ListPurchOrdProdDWs[0].DATE_RECV);
-            TransactionHeader.TransactionTypeID = 2; // Order
-            TransactionHeader.TransactionReference = ListPurchOrdProdDWs[0].PO_NO.Split('*')[0];
-            TransactionHeader.Description = "Receipt";
-            TransactionHeader.InvoiceHeaderID = 0;
-            TransactionHeader.CreatedDateTime = DateTime.Now;
-            TransactionHeader.CreatedMethod = "WBM_BGProcessor";
-            TransactionHeader.CreatedUserID = GS.selfUserID;
-            TransactionHeader.LastAmendedDateTime = TransactionHeader.CreatedDateTime;
-            TransactionHeader.LastAmendedMethod = "";
-            TransactionHeader.LastAmendedUserID = TransactionHeader.CreatedUserID;
+            TransactionHolder.TransactionHeader_Row.CompanyID = CompanyID;
+            TransactionHolder.TransactionHeader_Row.OwnerID = OwnerID;
+            TransactionHolder.TransactionHeader_Row.SiteID = SiteID;
+            TransactionHolder.TransactionHeader_Row.TransactionSourceID = 1; // Paperless
+            TransactionHolder.TransactionHeader_Row.TransactionDateTime = Convert.ToDateTime(PurchOrdProdDWWithDate.DATE_RECV);
+            TransactionHolder.TransactionHeader_Row.TransactionTypeID = 2; // Receipt
+            TransactionHolder.TransactionHeader_Row.TransactionReference = PurchOrdProdDWWithDate.PO_NO.Split('*')[0];
+            TransactionHolder.TransactionHeader_Row.Description = PurchOrdProdDWWithDate.SUPP_NAME; //supplier name, container num
+            if (PurchOrdProdDWWithDate.CONTAINER_NO != null && PurchOrdProdDWWithDate.CONTAINER_NO != "")
+                TransactionHolder.TransactionHeader_Row.Description = TransactionHolder.TransactionHeader_Row.Description + ", " + PurchOrdProdDWWithDate.CONTAINER_NO;
+            TransactionHolder.TransactionHeader_Row.InvoiceHeaderID = 0;
+            TransactionHolder.TransactionHeader_Row.CreatedDateTime = DateTime.Now;
+            TransactionHolder.TransactionHeader_Row.CreatedMethod = "WBM_BGProcessor";
+            TransactionHolder.TransactionHeader_Row.CreatedUserID = GS.selfUserID;
+            TransactionHolder.TransactionHeader_Row.LastAmendedDateTime = TransactionHolder.TransactionHeader_Row.CreatedDateTime;
+            TransactionHolder.TransactionHeader_Row.LastAmendedMethod = "";
+            TransactionHolder.TransactionHeader_Row.LastAmendedUserID = TransactionHolder.TransactionHeader_Row.CreatedUserID;
 
-            TransactionHeader.CreatedMethod = UnCutID;
+            TransactionHolder.TransactionHeader_Row.CreatedMethod = UnCutID;
         }
+
+        public void CreatePaperlessTransactionXRef()
+        {
+            TransactionHolder.PaperlessTransactionXref_Row = new PaperlessTransactionXref.dbRow();
+            TransactionHolder.PaperlessTransactionXref_Row.CompanyID = CompanyID;
+            TransactionHolder.PaperlessTransactionXref_Row.PaperlessKeyID = UnCutID;
+            TransactionHolder.PaperlessTransactionXref_Row.PaperlessDataTypeID = 2; // 1 is Order, 2 is Purchase Order, 3 maybe we add as receipt? Still testing
+            TransactionHolder.PaperlessTransactionXref_Row.ReferenceNumber = PurchOrdProdDWWithDate.PO_NO.Split('*')[0]; // one of these should change
+            TransactionHolder.PaperlessTransactionXref_Row.TransactionHeaderID = TransactionHolder.TransactionHeader_Row.ID;
+            TransactionHolder.PaperlessTransactionXref_Row.CreatedDateTime = TransactionHolder.TransactionHeader_Row.CreatedDateTime;
+            TransactionHolder.PaperlessTransactionXref_Row.CreatedMethod = TransactionHolder.TransactionHeader_Row.CreatedMethod;
+            TransactionHolder.PaperlessTransactionXref_Row.CreatedUserID = TransactionHolder.TransactionHeader_Row.CreatedUserID;
+            TransactionHolder.PaperlessTransactionXref_Row.LastAmendedDateTime = TransactionHolder.TransactionHeader_Row.LastAmendedDateTime;
+            TransactionHolder.PaperlessTransactionXref_Row.LastAmendedMethod = TransactionHolder.TransactionHeader_Row.LastAmendedMethod;
+            TransactionHolder.PaperlessTransactionXref_Row.LastAmendedUserID = TransactionHolder.TransactionHeader_Row.LastAmendedUserID;
+        }
+
         public void CreateTransactionDetailPreProcess(int RateFunctionID, string ChargeBy, int Quantity)
         {
             ChargeDetails cd = GetRateCollectionRateCodeIDRateChargeCodeDescription(RateFunctionID);
@@ -531,26 +640,133 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             {
                 TransactionDetail.dbRow tdRow = new TransactionDetail.dbRow();
                 tdRow.TransactionHeaderID = 0;
-                tdRow.CompanyID = TransactionHeader.CompanyID;
-                tdRow.OwnerID = TransactionHeader.OwnerID;
-                tdRow.SiteID = TransactionHeader.SiteID;
-                tdRow.TransactionDateTime = TransactionHeader.TransactionDateTime;
+                tdRow.CompanyID = TransactionHolder.TransactionHeader_Row.CompanyID;
+                tdRow.OwnerID = TransactionHolder.TransactionHeader_Row.OwnerID;
+                tdRow.SiteID = TransactionHolder.TransactionHeader_Row.SiteID;
+                tdRow.TransactionDateTime = TransactionHolder.TransactionHeader_Row.TransactionDateTime;
                 tdRow.RateCodeID = RateCodeID;
                 tdRow.RateCode = RateChargeCode;
                 tdRow.ChargeDescription = ChargeBy;
                 tdRow.FullDescription = FullDescription;
                 tdRow.Quantity = Quantity;
 
-                tdRow.CreatedDateTime = TransactionHeader.CreatedDateTime;
-                tdRow.CreatedMethod = TransactionHeader.CreatedMethod;
-                tdRow.CreatedUserID = TransactionHeader.CreatedUserID;
-                tdRow.LastAmendedDateTime = TransactionHeader.LastAmendedDateTime;
-                tdRow.LastAmendedMethod = TransactionHeader.LastAmendedMethod;
-                tdRow.LastAmendedUserID = TransactionHeader.LastAmendedUserID;
+                tdRow.CreatedDateTime = TransactionHolder.TransactionHeader_Row.CreatedDateTime;
+                tdRow.CreatedMethod = TransactionHolder.TransactionHeader_Row.CreatedMethod;
+                tdRow.CreatedUserID = TransactionHolder.TransactionHeader_Row.CreatedUserID;
+                tdRow.LastAmendedDateTime = TransactionHolder.TransactionHeader_Row.LastAmendedDateTime;
+                tdRow.LastAmendedMethod = TransactionHolder.TransactionHeader_Row.LastAmendedMethod;
+                tdRow.LastAmendedUserID = TransactionHolder.TransactionHeader_Row.LastAmendedUserID;
 
-                ListTransactionDetail.Add(tdRow);
+                TransactionHolder.ListTransactionDetail.Add(tdRow);
             }
         }
+
+        public bool Process_dbTrans()
+        {
+            Stock.dbRow stock_row = null;
+            Decimal qty = 0;
+
+            int this_unitTypeID = 0;
+            Boolean Process_Putaway = true;
+
+            int Carton_Count_I02 = 0;
+            int Pallet_Count_I04 = 0;
+            int Carton_Count_CTNUNLOAD = 0;
+            int Pallet_Count_UNLPAL = 0;
+            int Carton_Count_Breakdown = 0;
+
+            Decimal QtyAs2DP = 0;
+            int Qty = 0;
+
+            foreach (DB_TRANS dt in ListDBTrans)
+            {
+                // Quantity is stored with an implied 2 decimal points eg 2100 = 21.
+                if (dt.QUANTITY.HasValue)
+                {
+                    QtyAs2DP = dt.QUANTITY.Value / 100m;
+                }
+                Qty = Decimal.ToInt32(QtyAs2DP);
+
+                switch (dt.ACTION)
+                {
+                    case "I02":
+                        Carton_Count_I02 += Qty;
+                        break;
+                    case "I04":
+                        Pallet_Count_I04 += Qty;
+                        break;
+                    case "CTN.UNLOAD":
+                        Carton_Count_CTNUNLOAD += Qty;
+                        break;
+                    case "UNL.PAL":
+                        Pallet_Count_UNLPAL += Qty;
+                        break;
+                    case "PAL.BDOWN":
+                        Carton_Count_Breakdown += Qty;
+                        break;
+                }
+            }
+
+
+            // Records should have either I02/I04 or CTN.UNLOAD, UNL.PAL so take the greater
+
+            int Unload_Carton_Count = 0;
+            int Unload_Pallet_Count = 0;
+
+            if ((Carton_Count_I02 + Pallet_Count_I04) > (Carton_Count_CTNUNLOAD + Pallet_Count_UNLPAL))
+            {
+                Unload_Carton_Count = Carton_Count_I02;
+                Unload_Pallet_Count = Pallet_Count_I04;
+            }
+            else
+            {
+                Unload_Carton_Count = Carton_Count_CTNUNLOAD;
+                Unload_Pallet_Count = Pallet_Count_UNLPAL;
+            }
+
+            // Need a dummy record because we have no guarantee of the actual product codes
+
+            Stock.dbRow dummy_stock_row = new Stock.dbRow
+            {
+                StockRateCategoryID = 0,
+                Length = 0,
+                Width = 0
+            };
+
+            if (Unload_Carton_Count > 0)
+            {
+                DBTrans_Add_To_DictActionRateCodeStat(dummy_stock_row, ActionTypeID_Loadin, UnitTypeID_Carton, Unload_Carton_Count);
+            }
+
+            if (Unload_Pallet_Count > 0)
+            {
+                DBTrans_Add_To_DictActionRateCodeStat(dummy_stock_row, ActionTypeID_Loadin, UnitTypeID_Pallet, Unload_Pallet_Count);
+            }
+
+            if (Carton_Count_Breakdown > 0)
+            {
+                DBTrans_Add_To_DictActionRateCodeStat(dummy_stock_row, ActionTypeID_HandleIn, UnitTypeID_Carton, Carton_Count_Breakdown);
+            }
+
+            return true;
+        }
+
+        private void DBTrans_Add_To_DictActionRateCodeStat(Stock.dbRow stock_row, int ThisActionTypeID, int ThisUnitTypeID, int Quantity)
+        {
+            string ActionChargeCode = GetActionChargeCode(stock_row, ThisActionTypeID, ThisUnitTypeID);
+            ActionRateCodeStat arc_stat = null;
+            if (DictActionRateCodeStat.ContainsKey(ActionChargeCode))
+            {
+                arc_stat = DictActionRateCodeStat[ActionChargeCode];
+            }
+            else
+            {
+                arc_stat = new ActionRateCodeStat() { ActionTypeID = ThisActionTypeID, UnitTypeID = ThisUnitTypeID, ActionChargeCode = ActionChargeCode };
+                DictActionRateCodeStat.Add(ActionChargeCode, arc_stat);
+            }
+            arc_stat.Quantity += Quantity;
+        }
+
 
         public bool Process_Stock()
         {
@@ -558,56 +774,67 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             Decimal qty = 0;
 
             int this_unitTypeID = 0;
+            Boolean Process_Putaway = true;
 
             foreach (STOCK_MOVE_DW sm in ListStockMoveDW)
             {
+                #region Process Putaway
+
                 ZoneProcessing.dbRow ZP = ListZoneProcessing.FirstOrDefault(x => x.ZoneNumber == sm.FROM_ZONE);
+
+                Process_Putaway = true;
                 if (sm.MOVE_TYPE == "PUT.AWAY")
                     this_unitTypeID = UnitTypeID_Pallet;
                 else if (sm.MOVE_TYPE == "FULL.REP" && ZP != null && ZP.IsReceiving)
                     this_unitTypeID = UnitTypeID_Carton;
-                else continue;
+                else Process_Putaway = false;
 
-                stock_row = ListStock.FirstOrDefault(y => y.ProductCode == sm.PRODUCT_CODE);
-                // Count MOVE.QTY grouped on ActionChargeCode
-                if (stock_row != null)
+                if (Process_Putaway)
                 {
-                    string ActionChargeCode = GetActionChargeCode(stock_row, ActionTypeID_Putaway, this_unitTypeID);
-
-                    if (ActionChargeCode != null)
+                    stock_row = ListStock.FirstOrDefault(y => y.ProductCode == sm.PRODUCT_CODE);
+                    // Count MOVE.QTY grouped on ActionChargeCode
+                    if (stock_row != null)
                     {
-                        ActionRateCodeStat arc_stat = null;
-                        if (DictActionRateCodeStat.ContainsKey(ActionChargeCode))
+                        string ActionChargeCode = GetActionChargeCode(stock_row, ActionTypeID_Putaway, this_unitTypeID);
+
+                        if (ActionChargeCode != null)
                         {
-                            arc_stat = DictActionRateCodeStat[ActionChargeCode];
+                            ActionRateCodeStat arc_stat = null;
+                            if (DictActionRateCodeStat.ContainsKey(ActionChargeCode))
+                            {
+                                arc_stat = DictActionRateCodeStat[ActionChargeCode];
+                            }
+                            else
+                            {
+                                arc_stat = new ActionRateCodeStat() { ActionTypeID = ActionTypeID_Putaway, UnitTypeID = this_unitTypeID, ActionChargeCode = ActionChargeCode };
+                                DictActionRateCodeStat.Add(ActionChargeCode, arc_stat);
+                            }
+
+                            if (this_unitTypeID == UnitTypeID_Carton)
+                            {
+                                qty = sm.MOVE_QTY.HasValue ? sm.MOVE_QTY.Value : 0;
+                                arc_stat.Quantity += Convert.ToInt32(qty);
+                            }
+                            else if (this_unitTypeID == UnitTypeID_Pallet)
+                            {
+                                arc_stat.Quantity += 1;
+                            }
                         }
                         else
                         {
-                            arc_stat = new ActionRateCodeStat() { ActionTypeID = ActionTypeID_Putaway, UnitTypeID = this_unitTypeID, ActionChargeCode = ActionChargeCode };
-                            DictActionRateCodeStat.Add(ActionChargeCode, arc_stat);
-                        }
-
-                        if (this_unitTypeID == UnitTypeID_Carton)
-                        {
-                            qty = sm.MOVE_QTY.HasValue ? sm.MOVE_QTY.Value : 0;
-                            arc_stat.Quantity += Convert.ToInt32(qty);
-                        }
-                        else if (this_unitTypeID == UnitTypeID_Pallet)
-                        {
-                            arc_stat.Quantity += 1;
+                            failedErrorMessage = "ReceiptDataHolder Process Stock: action charge code not found on " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + UnCutID;
+                            logger.Error(failedErrorMessage);
+                            return false;
                         }
                     }
                     else
                     {
-                        logger.Error("ReceiptDataHolder Process Stock: action charge code not found on " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + UnCutID);
+                        failedErrorMessage = "ReceiptDataHolder Process Stock: stock row not found on " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + UnCutID;
+                        logger.Error(failedErrorMessage);
                         return false;
                     }
                 }
-                else
-                {
-                    logger.Error("ReceiptDataHolder Process Stock: stock row not found on " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + UnCutID);
-                    return false;
-                }
+                #endregion
             }
             return true;
         }

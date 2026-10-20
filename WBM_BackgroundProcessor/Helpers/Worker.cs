@@ -53,7 +53,7 @@ namespace WBM_BackgroundProcessor.Helpers
                 //wbm_api.SaveToAPI(IGH, "/api/InvoiceGenerateGenerate");
 
 
-                pwSCheck.Process();
+               // pwSCheck.Process();
 
                 wbm_api.CheckHeldData();
 
@@ -64,7 +64,8 @@ namespace WBM_BackgroundProcessor.Helpers
                 //await poll_location.PollTriggerTable();
                 //await poll_stock.PollTriggerTable();
                 await poll_order.PollTriggerTable(order.Poll.OrderEnum.TriggerRows);
-                await poll_receipt.PollTriggerTable(receipt.Poll.ReceiptEnum.Excel);
+                //await poll_receipt.PollTriggerTable(receipt.Poll.ReceiptEnum.Excel);
+                //await poll_receipt.PollTriggerTable(receipt.Poll.ReceiptEnum.TriggerRows);
                 //await poll_receiptIntegrityCheck.PollTriggerTable();
                 //await poll_orderIntegrityCheck.PollTriggerTable();
 

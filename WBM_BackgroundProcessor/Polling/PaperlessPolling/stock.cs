@@ -128,6 +128,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 dbRow.PalletStorageTypeID = 0;
                 dbRow.StockRateCategoryID = 0;
                 dbRow.CategoryID = 0;
+                dbRow.LayerPickEligible = false;
                 dbRow.CreatedMethod = "WBM_CA_MCA";
                 dbRow.CreatedUserID = GS.selfUserID;
                 dbRow.CreatedDateTime = now;
@@ -179,6 +180,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 CurrentStock.dbRow_instance.Height = STOCK_DW.Value[0].PROD_HEIGHT ?? 0;
                 CurrentStock.dbRow_instance.Weight = STOCK_DW.Value[0].PROD_WEIGHT ?? 0;
                 CurrentStock.dbRow_instance.ItemsPerPallet = (int)(STOCK_DW.Value[0].PAL_QTY ?? 0);
+                CurrentStock.dbRow_instance.ItemsPerLayer = (int)(STOCK_DW.Value[0].LAYER_CARTONS ?? 0);
             }
 
             private bool DoTranslations()
@@ -218,11 +220,12 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     || dbRow.SiteID != Existing_dbRow.SiteID
                     || dbRow.ProductCode != Existing_dbRow.ProductCode
                     || dbRow.Description != Existing_dbRow.Description
-                    || dbRow.Length != Existing_dbRow.Length
-                    || dbRow.Width != Existing_dbRow.Width
-                    || dbRow.Height != Existing_dbRow.Height
-                    || dbRow.Weight != Existing_dbRow.Weight
-                    || dbRow.ItemsPerPallet != Existing_dbRow.ItemsPerPallet;
+                    || Math.Abs(dbRow.Length - Existing_dbRow.Length) > (decimal)0.005
+                    || Math.Abs(dbRow.Width - Existing_dbRow.Width) > (decimal)0.005
+                    || Math.Abs(dbRow.Height - Existing_dbRow.Height) > (decimal)0.005
+                    || Math.Abs(dbRow.Weight - Existing_dbRow.Weight) > (decimal)0.005
+                    || dbRow.ItemsPerPallet != Existing_dbRow.ItemsPerPallet
+                    || dbRow.ItemsPerLayer != Existing_dbRow.ItemsPerLayer;
             }
 
             private bool ReadFromAPI()

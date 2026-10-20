@@ -78,16 +78,19 @@ namespace WBM_BackgroundProcessor.Models.Excel
         public Dictionary<string, List<EERow>> ExcelValues { get; set; }
         // matches up our text and their charges since their names are slightly different
         List<(string, string)> textmismatch = new List<(string, string)> { ("Wrap out pallet", "PALLET REWRAPPING - TRANSPORT"),
-        ("EDI Order", "STANDARD ORDER CHARGE"), ("Pick carton", "CARTON PICK"), ("Outbound label", "DESPATCH LABEL FEE ")
+        ("EDI Order", "STANDARD ORDER CHARGE"), ("Pick carton", "CARTON PICK"), ("Carton Pick", "CARTON PICK"), ("Outbound label", "DESPATCH LABEL FEE ")
             , ("Invoice Enclosed Envelope", "INVOICE ENCLOSED ENVELOPE")
-        , ("Pick full pallet", " FULL PALLET PICK "), ("Load out full pallet", " TRUCKLOAD FULL PALLET ")
+        , ("Pick full pallet", " FULL PALLET PICK "), ("Full Pallet Pick", "FULL PALLET PICK"), ("Load out full pallet", " TRUCKLOAD FULL PALLET ")
             , ("Outwards Pallet Wrapping", " PALLET REWRAPPING - TRANSPORT "), ("Outwards Labelling", " DESPATCH LABEL FEE ")
             , ("Load out carton", " TRUCKLOAD CARTON "), ("Truckload Pallet", " TRUCKLOAD FULL PALLET "),
         ("Putaway full pallet", " PUT AWAY PALLET "), ("Putaway Carton", " PUT AWAY CARTON "), ("Putaway Pallet", " PUT AWAY PALLET "),
         ("Wrap In Pallet", "INWARDS PALLET WRAPPING"), ("EDI Receipt Return", "RECEIPT PROCESSING FEE"),
         ("Container Lift", "CONTAINER LIFT CHARGE"), ("Devan Loose","CONTAINER UN-LOADING - 40' (L)"),
         ("3rd Pty Connote","3RD PARTY CON NOTE PREPARATION"), ("Priority Order", "PRIORITY ORDER FEE")
-        , ("3rd Party Connote", "3RD PARTY CON NOTE PREPARATION")};
+        , ("3rd Party Connote", "3RD PARTY CON NOTE PREPARATION"), ("Outwards Pallet Wrapping", "OUTBOUND PALLET WRAP")
+            , ("Outwards Labelling", "DESPATCH LABEL CHARGES"), ("EDI Returns Processing", "RECEIPT PROCESSING FEE"), ("Manual Returns Processing", "RETURN ORDER PROCESSING MANUAL")
+        , ("Pallet cap Outbound", "PALLET CAP"), ("Pallet cap Inbound", "PALLET CAP"), ("Pallet Iiner Outbound", "PALLET LINER"), ("Manual Receipt", "INWARDS RECEIPT PROCESSING FEE")
+        , ("Pallet Layer Pick", "LAYER PICK")};
         List<string> NoQtyCheckNeeded = new List<string> { "Container Lift", "Devan Loose" };
 
         private void TransPage(ExcelPackage ep)

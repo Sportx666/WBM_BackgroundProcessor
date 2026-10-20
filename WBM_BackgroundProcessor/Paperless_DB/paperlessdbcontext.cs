@@ -55,6 +55,7 @@ namespace WBM_BackgroundProcessor.Paperless_DB
 
         public DbSet<TRUCK_LOAD_DW> TRUCK_LOAD_DW { get; set; }
         public DbSet<ZONE_DW> ZONE_DW { get; set; }
+        public DbSet<WBM_PALLET_DW_ASATINSERT> WBM_PALLET_DW_ASATINSERT { get; set; }
 
     }
 }

@@ -50,6 +50,8 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 {
                     if (ListFileNames.Any(x => x.Contains(filename) && x != filename))
                         logerrorpair.Add((filename, ListFileNames.First(x => x.Contains(filename) && x != filename)));
+                    else
+                        File.Delete(filename);
                 }
 
                 int cnt = 0;
@@ -102,15 +104,31 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                                 File.Move(FromLoc, ToLoc, true);
                                 File.Delete(logerrpair.Item2);
                             }
-                            
-                            if (sourcefle.Count() >= 7 && sourcefle[1] == "LK080" && sourcefle[6] == "V")
+
+                            if (sourcefle.Count == 0 ||
+                                (sourcefle.Count > 1 && sourcefle[1].Length < 5) ||
+                                (sourcefle.Count >= 7 && sourcefle[1] == "LK080" && sourcefle[6] == "V"))
                             {
-                                // glitched file, ignore and delete error file.                                
+                                // empty files 
+                                // location LK080 glitched file, ignore and delete error file.
+                                // location lenght less then 5 not a valid location
+                                File.Delete(logerrpair.Item1);
                                 File.Delete(logerrpair.Item2);
                             }
 
                             break;
                         case "PALLET_DW":
+
+                            if (long.TryParse(sourcefle[6].Trim(), out long qty_move))
+                            {
+                                if (qty_move > 99999)
+                                {
+                                    // Invalid quantity or quantity greater than 99999
+                                    File.Delete(logerrpair.Item1);
+                                    File.Delete(logerrpair.Item2);
+                                }
+                            }
+
                             break;
                         case "STOCK_MOVE_DW":
                             stockmove(errorfle, sourcefle, logerrpair);
@@ -122,14 +140,6 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                                 !Int32.TryParse(sourcefle[25].Trim(), out int invLineNo))
                             {
                                 sourcefle[25] = "0";
-                                File.WriteAllLines(logerrpair.Item1, sourcefle);
-
-                                string FromLoc = logerrpair.Item1;
-                                string ToLoc = "\\\\cti-dc-opdg\\PWServicerTextFiles\\" + new FileInfo(logerrpair.Item1).Name;
-
-                                File.Move(FromLoc, ToLoc, true);
-                                File.Delete(logerrpair.Item2);
-
                             }
 
                             // DB_TRANS field 5 = REFERENCE
@@ -138,17 +148,16 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                                 sourcefle[5].Contains("/"))
                             {
                                 sourcefle[5] = sourcefle[5].TrimEnd('\'');
-                                sourcefle[22] = sourcefle[22].TrimEnd('\'');
-                                File.WriteAllLines(logerrpair.Item1, sourcefle);
-
-                                string FromLoc = logerrpair.Item1;
-                                string ToLoc = "\\\\cti-dc-opdg\\PWServicerTextFiles\\" + new FileInfo(logerrpair.Item1).Name;
-
-                                File.Move(FromLoc, ToLoc, true);
-                                File.Delete(logerrpair.Item2);
+                                sourcefle[22] = sourcefle[22].TrimEnd('\'');                                
                             }
 
-                            
+                            File.WriteAllLines(logerrpair.Item1, sourcefle);
+
+                            string _FromLoc = logerrpair.Item1;
+                            string _ToLoc = "\\\\cti-dc-opdg\\PWServicerTextFiles\\" + new FileInfo(logerrpair.Item1).Name;
+
+                            File.Move(_FromLoc, _ToLoc, true);
+                            File.Delete(logerrpair.Item2);
 
                             break;
                         case "STOCK_DW":
@@ -177,6 +186,13 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                                 File.Delete(logerrpair.Item2);
                             }                            
                             break;
+                        case "PURCH_ORD_PROD_DW":
+                            break;
+                        case "STOCK_RX_DW":
+                            // table not in use anymore 
+                            File.Delete(logerrpair.Item1);
+                            File.Delete(logerrpair.Item2);
+                            break;
                         default:
                             break;
                     }
@@ -204,7 +220,17 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     break;
                 case "CHECK.IN":
                 case "TR.LOAD":
-                    //keep as is
+
+                    if (long.TryParse(sourcefle[4].Trim(), out long qty_move))
+                    {
+                        if (qty_move > 99999)
+                        {
+                            // Invalid quantity or quantity greater than 99999
+                            File.Delete(logerrpair.Item1);
+                            File.Delete(logerrpair.Item2);
+                        }
+                    }
+
                     break;
                 default:
                     break;

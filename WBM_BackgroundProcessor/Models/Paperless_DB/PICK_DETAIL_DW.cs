@@ -40,7 +40,7 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
         public string PAL_STATUS { get; set; }
         public Nullable<decimal> QTY_CONFIRMED { get; set; }
         public Nullable<decimal> ALLOCATED_QTY { get; set; }
-        public string PAL_TYPE { get; set; }
+        public string? PAL_NO_TYPE { get; set; }
 
         [NotMapped]
         public int WBM_StockID { get; set; }
