@@ -4,6 +4,7 @@ using WBM_BackgroundProcessor.Paperless_DB;
 using Microsoft.Extensions.DependencyInjection;
 using WBM_BackgroundProcessor.Helpers;
 using WBM_BackgroundProcessor.WBM_DB;
+using WBM_BackgroundProcessor.Polling.FilePolling;
 
 IConfiguration config = new ConfigurationBuilder()
     .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
@@ -16,6 +17,10 @@ PaperlessDatabase db_Paperless = new PaperlessDatabase(pp_dbc);
 WBMdbcontext.ConnectionString = config.GetConnectionString("wbmdbConnection");
 WBMdbcontext wbmp_dbc = new WBMdbcontext();
 WBMDatabase db_wbm = new WBMDatabase(wbmp_dbc);
+
+stockOnHandFile.Poll.ImportFolder = config["StockOnHandImport:Folder"] ?? "";
+if (int.TryParse(config["StockOnHandImport:BatchSize"], out int sohBatchSize) && sohBatchSize > 0)
+    stockOnHandFile.Poll.BatchSize = sohBatchSize;
 
 var host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options => {

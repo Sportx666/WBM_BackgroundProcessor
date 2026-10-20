@@ -30,6 +30,8 @@ namespace WBM_BackgroundProcessor.Helpers
             WBM_BackgroundProcessor.Polling.PaperlessPolling.receiptIntegrityCheck.Poll poll_receiptIntegrityCheck = new WBM_BackgroundProcessor.Polling.PaperlessPolling.receiptIntegrityCheck.Poll(db_Paperless);
             WBM_BackgroundProcessor.Polling.PaperlessPolling.orderIntegrityCheck.Poll poll_orderIntegrityCheck = new WBM_BackgroundProcessor.Polling.PaperlessPolling.orderIntegrityCheck.Poll(db_Paperless);
 
+            WBM_BackgroundProcessor.Polling.FilePolling.stockOnHandFile.Poll poll_stockOnHandFile = new WBM_BackgroundProcessor.Polling.FilePolling.stockOnHandFile.Poll();
+
             WBM_BackgroundProcessor.Polling.PaperlessPolling.pwServicerCheck pwSCheck = new pwServicerCheck();
             while (!stoppingToken.IsCancellationRequested)
             {
@@ -56,6 +58,8 @@ namespace WBM_BackgroundProcessor.Helpers
                // pwSCheck.Process();
 
                 wbm_api.CheckHeldData();
+
+                poll_stockOnHandFile.PollFolder();
 
                 //await poll_zoneCheck.PollTriggerTable();
                 //await poll_zoneCheck.PollTriggerTable();
