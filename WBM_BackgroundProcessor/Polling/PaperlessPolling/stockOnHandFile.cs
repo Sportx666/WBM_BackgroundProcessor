@@ -432,8 +432,9 @@ namespace WBM_BackgroundProcessor.Polling
                 try
                 {
                     List<Location.dbRow> ListLocation = JsonConvert.DeserializeObject<List<Location.dbRow>>(response);
+                    // The API also returns SiteID 0 (all sites) locations; prefer the file's own site
                     CurrentLocations = ListLocation.Where(x => !x.DeletedFlag && !string.IsNullOrEmpty(x.PublicLocationID))
-                        .GroupBy(x => x.PublicLocationID).ToDictionary(x => x.Key, x => x.First().ID);
+                        .GroupBy(x => x.PublicLocationID).ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.SiteID == CurrentSiteID).First().ID);
                 }
                 catch (Exception ex)
                 {
@@ -464,8 +465,13 @@ namespace WBM_BackgroundProcessor.Polling
                 try
                 {
                     List<Stock.dbRow> ListStock = JsonConvert.DeserializeObject<List<Stock.dbRow>>(response);
-                    CurrentStocks = ListStock.Where(x => !x.DeletedFlag && x.SiteID == CurrentSiteID && !string.IsNullOrEmpty(x.ProductCode))
-                        .GroupBy(x => x.ProductCode).ToDictionary(x => x.Key, x => x.First().ID);
+                    // SiteID 0 means the stock applies to all sites (as in the API's site searches); prefer the file's own site
+                    CurrentStocks = ListStock.Where(x => !x.DeletedFlag && (x.SiteID == CurrentSiteID || x.SiteID == 0) && !string.IsNullOrEmpty(x.ProductCode))
+                        .GroupBy(x => x.ProductCode).ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.SiteID == CurrentSiteID).First().ID);
+
+                    int OtherSiteCount = ListStock.Where(x => !x.DeletedFlag && x.SiteID != CurrentSiteID && x.SiteID != 0).Select(x => x.ProductCode).Distinct().Count();
+                    logger.Info(LogPrefix + "owner " + OwnerCode + ": " + CurrentStocks.Count() + " of " + OwnerRows.Select(x => x.ProductCode).Distinct().Count()
+                        + " products found in Stock for site " + CurrentSite + (OtherSiteCount > 0 ? ", " + OtherSiteCount + " more only set up for another site" : ""));
                 }
                 catch (Exception ex)
                 {
