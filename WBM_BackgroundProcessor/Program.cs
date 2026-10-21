@@ -19,8 +19,6 @@ PaperlessDatabase db_Paperless = new PaperlessDatabase(pp_dbc);
 //WBM_BackgroundProcessor.Polling.PaperlessPolling.order.Poll poll_order = new WBM_BackgroundProcessor.Polling.PaperlessPolling.order.Poll(db_Paperless);
 //WBM_BackgroundProcessor.Polling.PaperlessPolling.receipt.Poll poll_receipt = new WBM_BackgroundProcessor.Polling.PaperlessPolling.receipt.Poll(db_Paperless);
 WBM_BackgroundProcessor.Polling.stockOnHandFile.Poll.ImportFolder = config["StockOnHandImport:Folder"] ?? "";
-if (int.TryParse(config["StockOnHandImport:ApiTimeoutSeconds"], out int sohApiTimeoutSeconds) && sohApiTimeoutSeconds > 0)
-    WBM_BackgroundProcessor.Polling.stockOnHandFile.Poll.ApiTimeoutSeconds = sohApiTimeoutSeconds;
 
 WBM_BackgroundProcessor.Polling.stockOnHandFile.Poll poll_stockOnHandFile = new WBM_BackgroundProcessor.Polling.stockOnHandFile.Poll();
 

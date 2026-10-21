@@ -5,7 +5,6 @@ using NLog;
 using NLog.Web;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text.RegularExpressions;
 using WBM_BackgroundProcessor.DataLookups;
 using WBM_BackgroundProcessor.Models.Excel;
 using WBM_BackgroundProcessor.Polling;
@@ -25,7 +24,6 @@ namespace WBM_BackgroundProcessor.Polling
         {
             // Set from appsettings.json StockOnHandImport section in Program.cs
             public static string ImportFolder = "";
-            public static int ApiTimeoutSeconds = 600;
 
             private static Logger logger = LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
             private CommonAPI CAPI = new CommonAPI();
@@ -46,9 +44,7 @@ namespace WBM_BackgroundProcessor.Polling
             Dictionary<string, int> CurrentStocks = null;       // ProductCode -> StockID for the current owner and site
             HashSet<(int, int, int)> ExistingStockOnHand = null; // (OwnerID, LocationID, StockID) already saved for this site and date
 
-            // Rows to send, and where each came from in the file, so an API error on "Row N" can be traced back
             List<StockOnHand.dbRow> ListSaveRow = null;
-            List<string> ListSaveRowSource = null;
 
             // Counts for the summary line
             int EmptyBinCount = 0;
@@ -121,7 +117,6 @@ namespace WBM_BackgroundProcessor.Polling
                 failedErrorMessage = "";
                 ListCsvRow = new List<StockOnHandCsvRow>();
                 ListSaveRow = new List<StockOnHand.dbRow>();
-                ListSaveRowSource = new List<string>();
                 EmptyBinCount = 0;
                 OwnerCount = 0;
                 SkippedOwners = new List<string>();
@@ -318,7 +313,6 @@ namespace WBM_BackgroundProcessor.Polling
                     }
 
                     ListSaveRow.Add(makeNewStockOnHand(LocationID, StockID, Quantity));
-                    ListSaveRowSource.Add("owner " + OwnerCode + ", bin " + BinProduct.Key.BinLocation + ", product " + BinProduct.Key.ProductCode + ", line " + Lines);
                     OwnerRowsBuilt++;
                 }
 
@@ -376,19 +370,11 @@ namespace WBM_BackgroundProcessor.Polling
 
                 // FetchFromAPIWithKeyID returns null on any failure, including the login; SaveToAPI returns true if the login fails
                 string jsonString = JsonConvert.SerializeObject(SOH);
-                if (CAPI.FetchFromAPIWithKeyID(jsonString, "StockOnHandSaveList", ApiTimeoutSeconds) == null)
+                if (CAPI.FetchFromAPIWithKeyID(jsonString, "StockOnHandSaveList") == null)
                 {
-                    string Reason = "StockOnHandSaveList failed after " + timer.Elapsed.TotalSeconds.ToString("0.0") + "s, nothing saved: " + CAPI.ErrorMessage;
-
-                    // The API names the failing row as "Row N of M", point to where it came from in the file
-                    Match RowMatch = Regex.Match(CAPI.ErrorMessage, @"Row (\d+) of \d+");
-                    if (RowMatch.Success && int.TryParse(RowMatch.Groups[1].Value, out int RowNumber) && RowNumber >= 1 && RowNumber <= ListSaveRowSource.Count())
-                        Reason += " (failing row is " + ListSaveRowSource[RowNumber - 1] + ")";
-
-                    if (CAPI.ErrorMessage.StartsWith("Timed out"))
-                        Reason += ". The API may still finish the save; dropping the file in again skips any rows already saved. If it keeps timing out raise StockOnHandImport:ApiTimeoutSeconds";
-
-                    failedErrorMessage = Reason;
+                    // The API logs which row it rejected ("Row N of M (OwnerID, LocationID, StockID): reason")
+                    failedErrorMessage = "StockOnHandSaveList failed after " + timer.Elapsed.TotalSeconds.ToString("0.0") + "s, nothing saved; the reason is in the CommonAPI error above and in the API log."
+                        + " If this took about 100s the call timed out and the API may still finish the save; dropping the file in again skips any rows already saved";
                     logger.Error(LogPrefix + failedErrorMessage);
                     return;
                 }
@@ -425,7 +411,7 @@ namespace WBM_BackgroundProcessor.Polling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "LocationSearch");
                 if (response == null)
                 {
-                    failedErrorMessage = "LocationSearch for site " + CurrentSite + " failed: " + CAPI.ErrorMessage;
+                    failedErrorMessage = "LocationSearch for site " + CurrentSite + " failed, see the CommonAPI error above";
                     logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
@@ -458,7 +444,7 @@ namespace WBM_BackgroundProcessor.Polling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockSearch");
                 if (response == null)
                 {
-                    failedErrorMessage = "StockSearch for owner " + OwnerCode + " failed: " + CAPI.ErrorMessage;
+                    failedErrorMessage = "StockSearch for owner " + OwnerCode + " failed, see the CommonAPI error above";
                     logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
@@ -496,7 +482,7 @@ namespace WBM_BackgroundProcessor.Polling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockOnHandSearch");
                 if (response == null)
                 {
-                    failedErrorMessage = "StockOnHandSearch for existing rows failed: " + CAPI.ErrorMessage;
+                    failedErrorMessage = "StockOnHandSearch for existing rows failed, see the CommonAPI error above";
                     logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
