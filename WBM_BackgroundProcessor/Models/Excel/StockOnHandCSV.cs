@@ -17,5 +17,9 @@ namespace WBM_BackgroundProcessor.Models.Excel
 
         [Name("Owner")]
         public string Owner { get; set; }
+
+        // Line in the file this row came from, filled in when reading, so log messages can point to it
+        [Ignore]
+        public int LineNumber { get; set; }
     }
 }

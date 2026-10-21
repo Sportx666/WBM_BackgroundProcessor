@@ -12,12 +12,43 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
         public CommonAPI() { }
         private AuthenticationResponse AuthResponse;
         private static Logger logger = LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
-        public string FetchFromAPIWithKeyID(string jsonStringSearch, string endpoint)
+
+        // Why the last FetchFromAPIWithKeyID call returned null, including the API's own error text when it sent one
+        public string LastErrorMessage { get; private set; } = "";
+
+        // WebClient with a settable timeout; the default is 100 seconds
+        private class TimeoutWebClient : WebClient
         {
+            public int TimeoutMilliseconds { get; set; }
+
+            protected override WebRequest GetWebRequest(Uri address)
+            {
+                WebRequest request = base.GetWebRequest(address);
+                if (request != null && TimeoutMilliseconds > 0)
+                {
+                    request.Timeout = TimeoutMilliseconds;
+                    if (request is HttpWebRequest httpRequest)
+                        httpRequest.ReadWriteTimeout = TimeoutMilliseconds;
+                }
+                return request;
+            }
+        }
+
+        // Large request bodies (eg a whole stock on hand file) are cut down so the log stays readable
+        private static string TruncateForLog(string text, int maxLength = 1000)
+        {
+            if (text == null || text.Length <= maxLength)
+                return text;
+            return text.Substring(0, maxLength) + "... (" + text.Length + " chars)";
+        }
+
+        public string FetchFromAPIWithKeyID(string jsonStringSearch, string endpoint, int timeoutSeconds = 0)
+        {
+            LastErrorMessage = "";
             try
             {
                 // connection type may be entirely different, not sure, and will be its own class once other tables are added
-                using (WebClient client = new WebClient())
+                using (TimeoutWebClient client = new TimeoutWebClient { TimeoutMilliseconds = timeoutSeconds * 1000 })
                 {
                     #region Authentication                
                     if (AuthResponse == null || AuthResponse.TokenExpiry.AddMinutes(-2) < DateTime.Now)
@@ -40,7 +71,8 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                         }
                         catch (Exception ex)
                         {
-                            logger.Error("CommonAPI FetchFromAPIWithKeyID Endpoint " + endpoint + ", search " + jsonStringSearch + ": " + ex);
+                            LastErrorMessage = "Authentication response could not be read: " + ex.Message;
+                            logger.Error("CommonAPI FetchFromAPIWithKeyID Endpoint " + endpoint + ", search " + TruncateForLog(jsonStringSearch) + ": " + ex);
                             return null;
                         }
                     }
@@ -58,11 +90,33 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     }
                 }
             }
-            catch (Exception excpt)
+            catch (WebException wex)
             {
-                logger.Error("CommonAPI FetchFromAPIWithKeyID Endpoint " + endpoint + ", search " + jsonStringSearch + ": " + excpt);
+                // A 400/500 from the API carries the real reason in the response body
+                string responseBody = "";
+                try
+                {
+                    if (wex.Response != null)
+                        using (StreamReader reader = new StreamReader(wex.Response.GetResponseStream()))
+                            responseBody = reader.ReadToEnd();
+                }
+                catch (Exception)
+                {
+                    // keep the original error if the body can't be read
+                }
+                LastErrorMessage = wex.Status == WebExceptionStatus.Timeout
+                    ? "Timed out waiting for the API" + (timeoutSeconds > 0 ? " after " + timeoutSeconds + " seconds" : "")
+                    : wex.Message + (responseBody != "" ? " " + TruncateForLog(responseBody) : "");
+                logger.Error("CommonAPI FetchFromAPIWithKeyID Endpoint " + endpoint + ", search " + TruncateForLog(jsonStringSearch) + ": " + LastErrorMessage + " " + wex);
                 return null;
             }
+            catch (Exception excpt)
+            {
+                LastErrorMessage = excpt.Message;
+                logger.Error("CommonAPI FetchFromAPIWithKeyID Endpoint " + endpoint + ", search " + TruncateForLog(jsonStringSearch) + ": " + excpt);
+                return null;
+            }
+            LastErrorMessage = "Not authenticated with the API";
             return null;
         }
 
