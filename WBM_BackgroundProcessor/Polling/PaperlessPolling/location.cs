@@ -2,7 +2,7 @@
 using NLog;
 using NLog.Web;
 using WBM_BackgroundProcessor.DataLookups;
-using WBM_BackgroundProcessor.Models;using wbm_common.NonDatabaseObjects;
+using WBM_BackgroundProcessor.Models;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 using wbm_common.DataObjects;
 
@@ -246,11 +246,13 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 tododbrow.CreatedDateTime = now;
                 tododbrow.CreatedMethod = "WBM_Loc_MToDo";
                 tododbrow.CreatedUserID = GS.selfUserID;
+                tododbrow.Created_UserPublicID = GS.selfUserPublicID;
                 tododbrow.Description = "new Location " + (positions_dw.Value[0].POSITION ?? "") + ", please check Pallet Storage Type"; 
                 tododbrow.EventDateTime = now;
                 tododbrow.LastAmendedDateTime = now;
                 tododbrow.LastAmendedMethod = "WBM_Loc_MToDo";// all these rows have limited characters so truncate where you can
                 tododbrow.LastAmendedUserID = GS.selfUserID;
+                tododbrow.LastAmended_UserPublicID = GS.selfUserPublicID;
                 tododbrow.Note = "new location";
                 tododbrow.OwnerID = 0;
                 tododbrow.SiteID = CurrentSiteID;

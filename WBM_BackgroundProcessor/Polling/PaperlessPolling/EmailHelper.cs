@@ -73,7 +73,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 myMM.Subject = "WBM Background Processor failed";
                 myMM.Body = body;
                 myMM.IsBodyHtml = true;
-                //smtpClient.Send(myMM);
+                smtpClient.Send(myMM);
             }
             catch (Exception e)
             {

@@ -38,6 +38,7 @@ namespace WBM_BackgroundProcessor.Helpers
 
                     currentHeader.InvoiceExFuel += currentDetail.ActualCustomerExtended;
                 }
+
             }
         }
 
@@ -46,41 +47,63 @@ namespace WBM_BackgroundProcessor.Helpers
         {
             // If we have a ratecode then use that; otherwise RateCodeID is actually RateFunctionID
 
+            RateCollection.dbRow RateCollectionRow = null;
             RateCode.dbRow RateCodeRow = null;
             List<TableRate.dbRow> ListTableRateForRate = null;
 
-
-            RateCodeRow = GetRateCodeRow_ByID(currentDetail.RateCodeID);
-
-            if (RateCodeRow != null)
+            if (currentDetail.RateCodeID > 0)
             {
-                ListTableRateForRate = GetTableRate_ByRateCodeID(currentDetail.RateCodeID);
+                RateCollectionRow = GetRateCodeCollectionRow_RateFunctionID(currentDetail.RateCodeID);
+            }
+            else
+            {
+                RateCollectionRow = GetRateCodeCollectionRow_ByRateCode(currentDetail.RateCode);
             }
 
-            Decimal ChargeAmount = RateCodeRow.Basic;
-
-            if (ListTableRateForRate != null)
+            if (RateCollectionRow != null)
             {
-                int NumUnits = currentDetail.Quantity - RateCodeRow.IncludedUnits;
+                RateCodeRow = GetRateCodeRow_ByID(RateCollectionRow.RateCodeID);
 
-                foreach (TableRate.dbRow trow in ListTableRateForRate)
+                if (RateCodeRow != null)
                 {
-                    ChargeAmount += (NumUnits * trow.TableCharge);
-                    NumUnits -= trow.TableBreak;
-
-                    if (NumUnits < 0)
-                        break;
+                    ListTableRateForRate = GetTableRate_ByRateCodeID(RateCollectionRow.RateCodeID);
                 }
+
+                Decimal ChargeAmount = RateCodeRow.Basic;
+
+                if (ListTableRateForRate != null)
+                {
+                    int NumUnits = currentDetail.Quantity - RateCodeRow.IncludedUnits;
+
+                    foreach (TableRate.dbRow trow in ListTableRateForRate)
+                    {
+                        ChargeAmount += (NumUnits * trow.TableCharge);
+                        NumUnits -= trow.TableBreak;
+
+                        if (NumUnits < 0)
+                            break;
+                    }
+                }
+
+                if (RateCodeRow.MinimumCharge > 0)
+                {
+                    if (ChargeAmount < RateCodeRow.MinimumCharge)
+                        ChargeAmount = RateCodeRow.MinimumCharge;
+                }
+
+                currentDetail.ActualCustomerExtended = ChargeAmount;
             }
 
-            if (RateCodeRow.MinimumCharge > 0)
-            {
-                if (ChargeAmount < RateCodeRow.MinimumCharge)
-                    ChargeAmount = RateCodeRow.MinimumCharge;
-            }
+        }
 
-            currentDetail.ActualCustomerExtended = ChargeAmount;
+        private RateCollection.dbRow GetRateCodeCollectionRow_ByRateCode(string RateCode)
+        {
+            return ListRateCollection.FirstOrDefault(r => r.RateChargeCode == RateCode);
+        }
 
+        private RateCollection.dbRow GetRateCodeCollectionRow_RateFunctionID(int RateFunctionID)
+        {
+            return ListRateCollection.FirstOrDefault(r => r.RateFunctionID == RateFunctionID);
         }
 
         private RateCode.dbRow GetRateCodeRow_ByID(int ID)
@@ -92,5 +115,8 @@ namespace WBM_BackgroundProcessor.Helpers
         {
             return ListTableRate.Where(r => r.RateID == ID).ToList();
         }
+
+
+
     }
 }
