@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace WBM_BackgroundProcessor.Models.Paperless_DB
 {
@@ -6,6 +7,7 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
     {
         [Key]
         public string KEYID { get; set; }
+        [Column("SITE.NO")]
         public string SITE_NO { get; set; }
         public string PO_NO { get; set; }
         public string SUPP_NAME { get; set; }
@@ -27,8 +29,8 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
         public Nullable<System.DateTime> DATE_REL { get; set; }
         public Nullable<System.DateTime> DATE_DEL { get; set; }
         public Nullable<decimal> PAL_COUNT { get; set; }
-        public string CONTAINER_SIZE { get; set; }
-        public string UNLOAD_TYPE { get; set; }
+        public string? CONTAINER_SIZE { get; set; }
+        public string? UNLOAD_TYPE { get; set; }
         public Nullable<System.DateTime> UBD { get; set; }
         public Nullable<System.DateTime> USE_BY_DATE { get; set; }
 

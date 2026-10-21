@@ -2,7 +2,7 @@
 using NLog;
 using NLog.Web;
 using WBM_BackgroundProcessor.DataLookups;
-using WBM_BackgroundProcessor.Models;using wbm_common.NonDatabaseObjects;
+using WBM_BackgroundProcessor.Models;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 using wbm_common.DataObjects;
 
@@ -30,7 +30,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
             List<Stock.dbRow> CurrentStockRow = null;
             Stock CurrentStock = null;
             Stock.dbRow Existing_dbRow = null;
-            List<string> ProductsToSkip = new List<string> { "HZLM_139", "HZLM_497", "HZLM_138", "HZLM_G100" };
+            List<string> ProductsToSkip = new List<string> { "HZLM_139", "HZLM_497" };
 
 
             public Paperless_DB.PaperlessDatabase Paperless_DB;
@@ -128,7 +128,6 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 dbRow.PalletStorageTypeID = 0;
                 dbRow.StockRateCategoryID = 0;
                 dbRow.CategoryID = 0;
-                dbRow.LayerPickEligible = false;
                 dbRow.CreatedMethod = "WBM_CA_MCA";
                 dbRow.CreatedUserID = GS.selfUserID;
                 dbRow.CreatedDateTime = now;
@@ -180,7 +179,6 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 CurrentStock.dbRow_instance.Height = STOCK_DW.Value[0].PROD_HEIGHT ?? 0;
                 CurrentStock.dbRow_instance.Weight = STOCK_DW.Value[0].PROD_WEIGHT ?? 0;
                 CurrentStock.dbRow_instance.ItemsPerPallet = (int)(STOCK_DW.Value[0].PAL_QTY ?? 0);
-                CurrentStock.dbRow_instance.ItemsPerLayer = (int)(STOCK_DW.Value[0].LAYER_CARTONS ?? 0);
             }
 
             private bool DoTranslations()
@@ -220,12 +218,11 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                     || dbRow.SiteID != Existing_dbRow.SiteID
                     || dbRow.ProductCode != Existing_dbRow.ProductCode
                     || dbRow.Description != Existing_dbRow.Description
-                    || Math.Abs(dbRow.Length - Existing_dbRow.Length) > (decimal)0.005
-                    || Math.Abs(dbRow.Width - Existing_dbRow.Width) > (decimal)0.005
-                    || Math.Abs(dbRow.Height - Existing_dbRow.Height) > (decimal)0.005
-                    || Math.Abs(dbRow.Weight - Existing_dbRow.Weight) > (decimal)0.005
-                    || dbRow.ItemsPerPallet != Existing_dbRow.ItemsPerPallet
-                    || dbRow.ItemsPerLayer != Existing_dbRow.ItemsPerLayer;
+                    || dbRow.Length != Existing_dbRow.Length
+                    || dbRow.Width != Existing_dbRow.Width
+                    || dbRow.Height != Existing_dbRow.Height
+                    || dbRow.Weight != Existing_dbRow.Weight
+                    || dbRow.ItemsPerPallet != Existing_dbRow.ItemsPerPallet;
             }
 
             private bool ReadFromAPI()
@@ -274,11 +271,13 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 tododbrow.CreatedDateTime = now;
                 tododbrow.CreatedMethod = "WBM_St_MToDo";
                 tododbrow.CreatedUserID = GS.selfUserID;
+                tododbrow.Created_UserPublicID = GS.selfUserPublicID;
                 tododbrow.Description = "New Stock " + (STOCK_DW.Value[0].PROD_DESC ?? "") + " for " + Owner;
                 tododbrow.EventDateTime = now;
                 tododbrow.LastAmendedDateTime = now;
                 tododbrow.LastAmendedMethod = "WBM_St_MToDo";// all these rows have limited characters so truncate where you can
                 tododbrow.LastAmendedUserID = GS.selfUserID;
+                tododbrow.LastAmended_UserPublicID = GS.selfUserPublicID;
                 tododbrow.Note = "Please check Pallet Storage Type, Stock Rate Category and Category";
                 tododbrow.OwnerID = CurrentOwnerID;
                 tododbrow.SiteID = CurrentSiteID;

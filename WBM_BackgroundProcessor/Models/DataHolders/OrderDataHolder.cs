@@ -1,7 +1,4 @@
-﻿using Microsoft.Extensions.Primitives;
-using NLog;
-using NLog.Targets;
-using NLog.Web;
+﻿using NLog.Targets;
 using System.Net.Http.Headers;
 using System.Security.AccessControl;
 using System.Text;
@@ -9,16 +6,15 @@ using WBM_BackgroundProcessor.DataLookups;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 using WBM_BackgroundProcessor.Polling;
 using wbm_common.DataObjects;
-using wbm_common.NonDatabaseObjects;
-using wbm_common.Paperless_DB_DataObjects;
 
 namespace WBM_BackgroundProcessor.Models.DataHolders
 {
     public class OrderDataHolder
     {
-        private static Logger logger = LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
         public OrderDataHolder(int CompanyID, int SiteID, int OwnerID)
         {
+            TransactionHeader = new TransactionHeader.dbRow();
+            ListTransactionDetail = new List<TransactionDetail.dbRow>();
             DictActionRateCodeStat = new Dictionary<string, ActionRateCodeStat>();
 
             this.CompanyID = CompanyID;
@@ -45,21 +41,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                 }
             }
         }
-
-        public class ChargeDetails
-        {
-            public int RateChargeCodeID { get; set; }
-            public string RateChargeCode { get; set; }
-            public string Desciption { get; set; }
-
-            public ChargeDetails(int RateChargeCodeID, string RateChargeCode, string Description)
-            {
-                this.RateChargeCodeID = RateChargeCodeID;
-                this.RateChargeCode = RateChargeCode;
-                this.Desciption = Description;
-            }
-        }
-
         #endregion
 
         public int OwnerID { get; set; }
@@ -109,7 +90,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
 
         public List<TRUCK_LOAD_DW> ListTruckLoadDW { get; set; }
         int PalletCountFromTruckLoad { get; set; }
-        int PalletCountFromPickHead { get; set; }
 
         #endregion
 
@@ -122,7 +102,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         public List<PriorityOrder.dbRow> ListPriorityOrder { get; set; }
 
         public List<CustomerAddressDefault.dbRow> ListCustomerAddressDefault { get; set; }
-        private CustomerAddressDefault.dbRow CADUsed { get; set; }
 
         public CustomerAddress.dbRow CustomerAddress { get; set; }
 
@@ -131,7 +110,10 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         public List<ConnoteFee.dbRow> ListConnoteFee { get; set; }
 
         public List<Carrier.dbRow> ListCarrier { get; set; }
-        public TransactionHolder TransactionHolder { get; set; }
+
+        public TransactionHeader.dbRow TransactionHeader { get; set; }
+
+        public List<TransactionDetail.dbRow> ListTransactionDetail { get; set; }
 
         public List<RateCollection.dbRow> ListRateCollection { get; set; }
 
@@ -199,6 +181,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         private Boolean Calculated_IsPriority { get; set; }
 
         public int WrapOut_Pal { get; set; }
+        public int TotalPalletOut { get; set; }
 
         public int ConnoteLabelCount { get; set; }
         public Boolean ChargeInvoiceEnclosed { get; set; }
@@ -210,7 +193,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         private int ActionTypeID_LoadOut = 5;
         private int UnitTypeID_Carton = 1;
         private int UnitTypeID_Pallet = 2;
-        private int UnitTypeID_Layer = 3;
 
         public Dictionary<string, ActionRateCodeStat> DictActionRateCodeStat { get; set; }
 
@@ -363,7 +345,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                 }
             }
 
-            if (!GotInvEncl || !GotPalletHireDelayDays)
+            if (!GotInvEncl || GotPalletHireDelayDays)
             {
                 CustomerAddressDefault.dbRow found_row = null;
                 Boolean DisqualifyRule = false;
@@ -398,7 +380,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                 }
                 if (found_row != null)
                 {
-                    CADUsed = found_row;
                     if (!GotInvEncl)
                         ChargeInvoiceEnclosed = found_row.InvoiceEnclosed;
 
@@ -414,11 +395,11 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
 
             if (PickHeadDW.TO_HOST_DATE.HasValue)
             {
-                // This is an EDI order, see ORDER_EDI
+                // This is an EDI order, no manual charge applied
             }
             else
             {
-                CreateTransactionDetailPreProcess(20, "Each", 1);
+                CreateTransactionDetail(20, "", "Each", "Manual order", 1);
             }
         }
 
@@ -428,11 +409,11 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             if (PickHeadDW.TO_HOST_DATE.HasValue)
             {
                 // This is an EDI order, 
-                CreateTransactionDetailPreProcess(19, "Each", 1);
+                CreateTransactionDetail(19, "", "Each", "EDI Order", 1);
             }
             else
             {
-                // Manual order - see ORDER_MAN
+                // Manual order
             }
         }
 
@@ -440,7 +421,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         {
             if (Calculated_IsPriority)
             {
-                CreateTransactionDetailPreProcess(21, "Each", 1);
+                CreateTransactionDetail(21, "", "Each", "Priority order", 1);
             }
         }
 
@@ -448,30 +429,29 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         {
             if (ChargeInvoiceEnclosed)
             {
-                CreateTransactionDetailPreProcess(38, "Each", 1);
+                CreateTransactionDetail(38, "", "Each", "Invoice Enclosed Envelope", 1);
             }
         }
         public void PAL_DELAY()
         {
-            if (PalletHireDelayDays > 0 && PalletCountFromPickHead > 0)
+            if (PalletHireDelayDays > 0 && TotalPalletOut > 0)
             {
-                ChargeDetails cd = GetRateCollectionRateCodeIDRateChargeCodeDescription(37);
-
                 StringBuilder FullDescription = new StringBuilder();
-                FullDescription.Append("Pallet Hire Delay - " + PalletCountFromPickHead.ToString() + " pallet");
-                if (PalletCountFromPickHead > 1)
+                FullDescription.Append("Pallet Hire Delay - " + TotalPalletOut.ToString() + " pallet");
+                if (TotalPalletOut > 1)
                     FullDescription.Append("s");
 
-                FullDescription.Append(" " + PalletHireDelayDays.ToString());
+                FullDescription.Append(PalletHireDelayDays.ToString());
 
                 if (PalletHireDelayDays > 1)
                     FullDescription.Append(" days");
                 else
                     FullDescription.Append(" day");
 
-                CreateTransactionDetail(cd.RateChargeCodeID, cd.RateChargeCode, "Per Pallet Per Day", FullDescription.ToString(), PalletHireDelayDays * PalletCountFromPickHead);
+                CreateTransactionDetail(37, "", "Per Pal Per Day", FullDescription.ToString(), PalletHireDelayDays);
             }
         }
+
 
         public void ORD_PICK()
         {
@@ -479,7 +459,13 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             {
                 if (arc_stat.ActionTypeID == ActionTypeID_Pick)
                 {
-                    CreateTransactionDetailPreProcess(arc_stat.ActionChargeCode, "Each", arc_stat.Quantity);
+                    string ChargeDescription = "Each";
+                    string FullDescription = "Pick carton";
+
+                    if (arc_stat.UnitTypeID == 2)
+                        FullDescription = "Pick full pallet";
+
+                    CreateTransactionDetail(0, arc_stat.ActionChargeCode, ChargeDescription, FullDescription, arc_stat.Quantity);
                 }
             }
         }
@@ -488,33 +474,15 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         {
             if (WrapOut_Pal > 0)
             {
-                CreateTransactionDetailPreProcess(26, "Each", WrapOut_Pal);
+                CreateTransactionDetail(26, "", "Each", "Wrap out pallet", WrapOut_Pal);
             }
         }
-
-        public void ORD_CAPOUT_PAL()
-        {
-            // Caps are same logic as pallet wraps but some owners may not have liners; so this is separate
-            if (WrapOut_Pal > 0)
-            {
-                CreateTransactionDetailPreProcess(52, "Each", WrapOut_Pal);
-            }
-        }
-        public void ORD_LINEROUT_PAL()
-        {
-            // Liners are same logic as pallet wraps but some owners may not have liners; so this is separate
-            if (WrapOut_Pal > 0)
-            {
-                CreateTransactionDetailPreProcess(53, "Each", WrapOut_Pal);
-            }
-        }
-
 
         public void LABELOUT()
         {
             if (ConnoteLabelCount > 0)
             {
-                CreateTransactionDetailPreProcess(35, "Each", ConnoteLabelCount);
+                CreateTransactionDetail(35, "", "Each", "Outbound label", ConnoteLabelCount);
             }
         }
 
@@ -524,7 +492,13 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             {
                 if (arc_stat.ActionTypeID == ActionTypeID_HandleOut)
                 {
-                    CreateTransactionDetailPreProcess(arc_stat.ActionChargeCode, "Each", arc_stat.Quantity);
+                    string ChargeDescription = "Each";
+                    string FullDescription = "Handle out carton";
+
+                    if (arc_stat.UnitTypeID == 2)
+                        FullDescription = "Handle out full pallet";
+
+                    CreateTransactionDetail(0, arc_stat.ActionChargeCode, ChargeDescription, FullDescription, arc_stat.Quantity);
                 }
             }
         }
@@ -533,9 +507,15 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
         {
             foreach (ActionRateCodeStat arc_stat in DictActionRateCodeStat.Values)
             {
-                if (arc_stat.ActionTypeID == ActionTypeID_LoadOut)
+                if (arc_stat.ActionTypeID == 5)
                 {
-                    CreateTransactionDetailPreProcess(arc_stat.ActionChargeCode, "Each", arc_stat.Quantity);
+                    string ChargeDescription = "Each";
+                    string FullDescription = "Load out carton";
+
+                    if (arc_stat.UnitTypeID == 2)
+                        FullDescription = "Load out full pallet";
+
+                    CreateTransactionDetail(0, arc_stat.ActionChargeCode, ChargeDescription, FullDescription, arc_stat.Quantity);
                 }
             }
         }
@@ -543,92 +523,68 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
 
         public void CONNOTE()
         {
-            // order of charges to consider
-            // 1. The Connote Fee row that matches the customer address ID and carrier
-            // 2. The Connote Fee row that matches the customer address ID only (carrier 0)
-            // 3. The Customer Address that matches the customer
-            // 4. The generic Connote Fee row that matches the Carrier, then site, then owner
-            // 5. The generic Connote Fee row with no Carrier that matches site, then owner
+            string ConnoteChargeCode = null;
 
-            // also important to note that if say 1 or 2 have a NOCHARGE there they will still be picked and then later on that charge will
-            // be deleted/not contribute to the cost. Any found charges that are empty will be skipped over as if nothing was found
-            // Connote fee for location on carrier is most specific, then going through 1-5 only the site and owner matching is least specific
-            // while still being application
-            // if 1 doesn't exist, 2 has '', 3 has NOCHARGE and 4 has CONNOTE. We find 2, then move to 3 and use that. it will just not produce a charge
-            // if 3 was empty we would continue to 4 and use that.
-
-            // internal priority order
-            string RateCollectionRateChargeCode = "";
-
-            List<ConnoteFee.dbRow> completecustomerCFmatch = ListConnoteFee.Where(x => CustomerAddress != null && x.CustomerAddressID == CustomerAddress.ID
-                    && (x.CarrierID == 0 || x.CarrierID == CarrierID)).ToList();
-            // Here if we get one result, ordering a list of 1 does nothing and we take that one result.
-            // If there's two, one that has carrier wildcard and one that matches the order desc will mean match is first in the list and we take that
-            if (completecustomerCFmatch.Count() > 0)
+            ConnoteFee.dbRow found_row = null;
+            Boolean DisqualifyRule = false;
+            foreach (ConnoteFee.dbRow cad in ListConnoteFee)
             {
-                // so take matching carrier first
-                RateCollectionRateChargeCode = completecustomerCFmatch.OrderByDescending(x => x.CarrierID).First().RateCollectionRateChargeCode;
-            }
-            if (RateCollectionRateChargeCode == "")
-            {
-                if (CustomerAddress != null && CustomerAddress.Connote_RateCollectionRateChargeCode != "")
-                    RateCollectionRateChargeCode = CustomerAddress.Connote_RateCollectionRateChargeCode;
-                if (RateCollectionRateChargeCode == "")
+                // List is ordered by owner then site. 
+                // we will first choose the generic no owner, no site,
+                // then if there is a site,
+                // then if there is an owner,
+                // lastly if there is an owner and site
+
+                DisqualifyRule = false;
+
+                if (cad.CompanyID > 0 && cad.CompanyID != CompanyID)
                 {
-                    // generic matches
-                    List<ConnoteFee.dbRow> genericCFmatches = ListConnoteFee.Where(x => x.CustomerAddressID == 0 
-                        && (x.CarrierID == 0 || x.CarrierID == CarrierID)
-                        && (x.CompanyID == 0 || x.CompanyID == CompanyID)
-                        && (x.OwnerID == 0 || x.OwnerID == OwnerID)
-                        && (x.SiteID == 0 || x.SiteID == SiteID)).ToList();
-
-                    if (genericCFmatches.Count() > 0)
-                    {
-                        // If there is no match on carrierID - we then look for rows where carrierID = 0 and in order:
-                        // here a set of (Carrier = no match, Site = match), (Carrier = no match, Site = no match), (Carrier = match, Site = match)
-                        // will pick double match at front of list
-                        ConnoteFee.dbRow restCFmatch = genericCFmatches.OrderByDescending(x => x.CarrierID)
-                            .ThenByDescending(x => x.SiteID).ThenByDescending(x => x.OwnerID).First();
-                        RateCollectionRateChargeCode = restCFmatch.RateCollectionRateChargeCode;
-                    }
+                    DisqualifyRule = true;
                 }
+
+                if (!DisqualifyRule && (cad.OwnerID > 0 && cad.OwnerID != OwnerID))
+                {
+                    DisqualifyRule = true;
+                }
+
+                if (!DisqualifyRule && (cad.SiteID > 0 && cad.SiteID != SiteID))
+                {
+                    DisqualifyRule = true;
+                }
+
+                if (!DisqualifyRule && (cad.CustomerNumber != "" && cad.CustomerNumber != PickHeadDW.CUST_NO))
+                {
+                    DisqualifyRule = true;
+                }
+
+                if (cad.CarrierID > 0 && cad.CarrierID != CarrierID)
+                {
+                    DisqualifyRule = true;
+                }
+
+                if (!DisqualifyRule)
+                    found_row = cad;
             }
-            if (RateCollectionRateChargeCode != "")
-                CreateTransactionDetailPreProcess(RateCollectionRateChargeCode, "Each", 1);
+            if (found_row != null)
+            {
+                CreateTransactionDetail(0, found_row.RateCollectionRateChargeCode, "Each", "3rd Pty Connote", 1);
+
+                ConnoteChargeCode = found_row.RateCollectionRateChargeCode;
+
+            }
 
         }
 
-        public string failedErrorMessage = "";
-        public bool ProcessOrder()
+        public void ProcessOrder()
         {
-            if (TransactionHolder == null || TransactionHolder.TransactionHeader_Row == null)
-            {
-                TransactionHolder = new TransactionHolder();
-                TransactionHolder.TransactionHeader_Row = new TransactionHeader.dbRow();
             CreateTransactionHeader();
-            }
-            else
-            {
-                TransactionHolder.TransactionHeader_Row.InvoiceExFuel = 0;
-                TransactionHolder.TransactionHeader_Row.InvoiceExGST = 0;
-                TransactionHolder.TransactionHeader_Row.InvoiceFuel = 0;
-                TransactionHolder.TransactionHeader_Row.InvoiceGST = 0;
-            }
-            if (TransactionHolder.ListTransactionDetail == null)
-                TransactionHolder.ListTransactionDetail = new List<TransactionDetail.dbRow>();
-            if (TransactionHolder.PaperlessTransactionXref_Row == null)
-                CreatePaperlessTransactionXRef();
             PreProcessData();
-            if(!Process_Pick())
-                return false;
-            if (!Process_HandleOut())
-                return false;
+            Process_Pick();
+            Process_HandleOut();
 
             if (PickHeadDW == null)
             {
-                failedErrorMessage = "OrderDataHolder Process Order: No PickHeads to work with";
-                logger.Error(failedErrorMessage);
-                return false;
+                // Error, cannot proceed
             }
 
             foreach (ProcessingRule.dbRow pr in ListProcessingRule)
@@ -677,18 +633,9 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                         break;
                     case 25:
                         // PALHIRE_DELAY
-                        PAL_DELAY();
                         break;
                     case 26:
                         // MINORDER
-                        break;
-                    case 35:
-                        // CAP OUT
-                        ORD_CAPOUT_PAL();
-                        break;
-                    case 36:
-                        // LINER OUT
-                        ORD_LINEROUT_PAL();
                         break;
                     default:
                         // should not be here...
@@ -696,13 +643,10 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                 }
             }
 
-            if (addDebug)
-                AddDebugInfo();
-            TransactionHolder.TransactionHeader_Row.LastAmendedMethod = debugString.ToString();
-            return true;
+            AddDebugInfo();
+            TransactionHeader.LastAmendedMethod = debugString.ToString();
         }
 
-        public bool addDebug = false;
 
         public void AddDebugInfo()
         {
@@ -710,7 +654,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             debugString.Append("Zone: " + PickHeadDW.OUT_ZONE + " ");
             if (ZoneProcessing != null)
             {
-                // pretend named order consolidation
                 if (ZoneProcessing.IsCartonConsolidation)
                     debugString.Append("CC, ");
                 else
@@ -728,14 +671,12 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                 debugString.Append("Count T_L " + ListTruckLoadDW.Count + ", ");
 
                 int PalletCount = 0;
-                List<string> trckldList = new List<string>();
                 foreach (TRUCK_LOAD_DW tl_dw in ListTruckLoadDW)
                 {
                     if (Int32.TryParse(tl_dw.RF_PAL_TYPE_COUNTED, out int paltype_counted))
                         PalletCount += paltype_counted;
-                    trckldList.Add("TrckLd_Flg " + (tl_dw.RF_PAL_TYPE_ENTERED == "" ? "<empty>" : tl_dw.RF_PAL_TYPE_ENTERED) + ", ");
+                    debugString.Append("TrckLd_Flg " + (tl_dw.RF_PAL_TYPE_ENTERED == "" ? "<empty>" : tl_dw.RF_PAL_TYPE_ENTERED) + ", ");
                 }
-                trckldList.GroupBy(x => x).Select((x, cnt) => debugString.Append(x + (cnt > 1 ? "(x" + cnt.ToString() + ")" : "")));
                 debugString.Append("Count TrckLd_Tot " + PalletCount.ToString() + ", ");
             }
             else
@@ -753,101 +694,60 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                 }
             }
 
-            if (CustomerAddress != null)
-                debugString.Append("CustAdd: " + CustomerAddress.Name + ", ");
 
-            if (CADUsed != null)
-                debugString.Append("CustAddD: " + CADUsed.PublicID + ", ");
         }
         public void CreateTransactionHeader()
         {
-            TransactionHolder.TransactionHeader_Row.CompanyID = CompanyID;
-            TransactionHolder.TransactionHeader_Row.OwnerID = OwnerID;
-            TransactionHolder.TransactionHeader_Row.SiteID = SiteID;
-            TransactionHolder.TransactionHeader_Row.TransactionSourceID = 1; // Paperless
-            TransactionHolder.TransactionHeader_Row.TransactionDateTime = Convert.ToDateTime(PickHeadDW.DATE_RECV);
-            TransactionHolder.TransactionHeader_Row.TransactionTypeID = 1; // Order
-            TransactionHolder.TransactionHeader_Row.TransactionReference = PaperlessOrderNumber;
-            TransactionHolder.TransactionHeader_Row.Description = Owner_SourceOwnerID;
-            TransactionHolder.TransactionHeader_Row.Description = PickHeadDW.CUST_NAME + ", " + PickHeadDW.CUST_SUB;
-            TransactionHolder.TransactionHeader_Row.InvoiceHeaderID = 0;
-            TransactionHolder.TransactionHeader_Row.CreatedDateTime = DateTime.Now;
-            TransactionHolder.TransactionHeader_Row.CreatedMethod = "WBM_BGProcessor";
-            TransactionHolder.TransactionHeader_Row.CreatedUserID = GS.selfUserID;
-            TransactionHolder.TransactionHeader_Row.LastAmendedDateTime = TransactionHolder.TransactionHeader_Row.CreatedDateTime;
-            TransactionHolder.TransactionHeader_Row.LastAmendedMethod = "";
-            TransactionHolder.TransactionHeader_Row.LastAmendedUserID = TransactionHolder.TransactionHeader_Row.CreatedUserID;
-            TransactionHolder.TransactionHeader_Row.CanInvoice = true;
+            TransactionHeader.CompanyID = CompanyID;
+            TransactionHeader.OwnerID = OwnerID;
+            TransactionHeader.SiteID = SiteID;
+            TransactionHeader.TransactionSourceID = 1; // Paperless
+            TransactionHeader.TransactionDateTime = Convert.ToDateTime(PickHeadDW.DATE_RECV);
+            TransactionHeader.TransactionTypeID = 2; // Order
+            TransactionHeader.TransactionReference = PaperlessOrderNumber;
+            TransactionHeader.Description = "Order";
+            TransactionHeader.InvoiceID = 0;
+            TransactionHeader.InvoiceDateTime = DateTime.Now;
+            TransactionHeader.CreatedDateTime = DateTime.Now;
+            TransactionHeader.CreatedMethod = "WBM_BGProcessor";
+            TransactionHeader.CreatedUserID = GS.selfUserID;
+            TransactionHeader.LastAmendedDateTime = TransactionHeader.CreatedDateTime;
+            TransactionHeader.LastAmendedMethod = "";
+            TransactionHeader.LastAmendedUserID = TransactionHeader.CreatedUserID;
+
+            TransactionHeader.CreatedMethod = PickHeadDW.KEYID;
         }
 
-        public void CreatePaperlessTransactionXRef()
-        {
-            TransactionHolder.PaperlessTransactionXref_Row = new PaperlessTransactionXref.dbRow();
-            TransactionHolder.PaperlessTransactionXref_Row.CompanyID = CompanyID;
-            TransactionHolder.PaperlessTransactionXref_Row.PaperlessKeyID = PaperlessOrderNumber;
-            TransactionHolder.PaperlessTransactionXref_Row.PaperlessDataTypeID = 1; // Order, 2 is Purchase Order
-            TransactionHolder.PaperlessTransactionXref_Row.ReferenceNumber = PaperlessOrderNumber; // one of these should change
-            TransactionHolder.PaperlessTransactionXref_Row.TransactionHeaderID = TransactionHolder.TransactionHeader_Row.ID;
-            TransactionHolder.PaperlessTransactionXref_Row.CreatedDateTime = TransactionHolder.TransactionHeader_Row.CreatedDateTime;
-            TransactionHolder.PaperlessTransactionXref_Row.CreatedMethod = TransactionHolder.TransactionHeader_Row.CreatedMethod;
-            TransactionHolder.PaperlessTransactionXref_Row.CreatedUserID = TransactionHolder.TransactionHeader_Row.CreatedUserID;
-            TransactionHolder.PaperlessTransactionXref_Row.LastAmendedDateTime = TransactionHolder.TransactionHeader_Row.LastAmendedDateTime;
-            TransactionHolder.PaperlessTransactionXref_Row.LastAmendedMethod = TransactionHolder.TransactionHeader_Row.LastAmendedMethod;
-            TransactionHolder.PaperlessTransactionXref_Row.LastAmendedUserID = TransactionHolder.TransactionHeader_Row.LastAmendedUserID;
-        }
-
-        public void CreateTransactionDetailPreProcess(int RateFunctionID, string ChargeBy, int Quantity)
-        {
-            ChargeDetails cd = GetRateCollectionRateCodeIDRateChargeCodeDescription(RateFunctionID);
-
-            CreateTransactionDetail(cd.RateChargeCodeID, cd.RateChargeCode, ChargeBy, cd.Desciption, Quantity);
-        }
-
-        public void CreateTransactionDetailPreProcess(string RateChargeCode, string ChargeBy, int Quantity)
-        {
-            if (RateChargeCode != "NOCHARGE")
-            {
-                ChargeDetails cd = GetRateCollectionRateCodeIDRateChargeCodeDescription(0, RateChargeCode);
-
-                CreateTransactionDetail(cd.RateChargeCodeID, cd.RateChargeCode, ChargeBy, cd.Desciption, Quantity);
-            }
-        }
-
-
-        public void CreateTransactionDetail(int RateCodeID, string RateChargeCode, string ChargeBy, string FullDescription,
+        public void CreateTransactionDetail(int RateFunctionID, string RateCode, string ChargeDescription, string FullDescription,
             int Quantity)
         {
-            if (RateChargeCode != "NOCHARGE")
+            if (RateCode != "NOCHARGE")
             {
                 TransactionDetail.dbRow tdRow = new TransactionDetail.dbRow();
-                tdRow.RateCode = RateChargeCode;
-                TransactionDetail.dbRow tdRowExist = TransactionHolder.ListTransactionDetail.FirstOrDefault(x => x.RateCode == tdRow.RateCode);
-                if (tdRowExist != null)
-                    tdRow = tdRowExist;
-                else
-                {
-                tdRow.CompanyID = TransactionHolder.TransactionHeader_Row.CompanyID;
-                tdRow.OwnerID = TransactionHolder.TransactionHeader_Row.OwnerID;
-                tdRow.SiteID = TransactionHolder.TransactionHeader_Row.SiteID;
-                    tdRow.TransactionHeaderID = 0;
-                tdRow.CreatedDateTime = TransactionHolder.TransactionHeader_Row.CreatedDateTime;
-                tdRow.CreatedMethod = TransactionHolder.TransactionHeader_Row.CreatedMethod;
-                tdRow.CreatedUserID = TransactionHolder.TransactionHeader_Row.CreatedUserID;
-                tdRow.LastAmendedDateTime = TransactionHolder.TransactionHeader_Row.LastAmendedDateTime;
-                tdRow.LastAmendedMethod = TransactionHolder.TransactionHeader_Row.LastAmendedMethod;
-                tdRow.LastAmendedUserID = TransactionHolder.TransactionHeader_Row.LastAmendedUserID;
-
-                TransactionHolder.ListTransactionDetail.Add(tdRow);
-            }
-                tdRow.TransactionDateTime = TransactionHolder.TransactionHeader_Row.TransactionDateTime;
-                tdRow.RateCodeID = RateCodeID;
-                tdRow.ChargeDescription = ChargeBy;
+                tdRow.TransactionHeaderID = 0;
+                tdRow.CompanyID = TransactionHeader.CompanyID;
+                tdRow.OwnerID = TransactionHeader.OwnerID;
+                tdRow.SiteID = TransactionHeader.SiteID;
+                tdRow.TransactionDateTime = TransactionHeader.TransactionDateTime;
+                tdRow.RateCodeID = RateFunctionID;
+                tdRow.RateCode = RateCode;
+                tdRow.ChargeDescription = ChargeDescription;
                 tdRow.FullDescription = FullDescription;
                 tdRow.Quantity = Quantity;
-        }
+
+                tdRow.CreatedDateTime = TransactionHeader.CreatedDateTime;
+                tdRow.CreatedMethod = TransactionHeader.CreatedMethod;
+                tdRow.CreatedUserID = TransactionHeader.CreatedUserID;
+                tdRow.LastAmendedDateTime = TransactionHeader.LastAmendedDateTime;
+                tdRow.LastAmendedMethod = TransactionHeader.LastAmendedMethod;
+                tdRow.LastAmendedUserID = TransactionHeader.LastAmendedUserID;
+
+                ListTransactionDetail.Add(tdRow);
+            }
+
         }
 
-        public bool Process_Pick()
+        public void Process_Pick()
         {
             Stock.dbRow stock_row = null;
             Decimal qty = 0;
@@ -884,9 +784,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                     Pick_TotalCartonCount += sm.MOVE_QTY.HasValue ? sm.MOVE_QTY.Value : 0;
 
                     stock_row = GetStockRow(sm.PRODUCT_CODE);
-                    // need to check if it is a carton pick with an exact multiple of a pick layer since then we charge layer
-                    if (this_unitTypeID == UnitTypeID_Carton && sm.MOVE_QTY.HasValue && sm.MOVE_QTY.Value > 0 && stock_row.LayerPickEligible && sm.MOVE_QTY.Value % stock_row.ItemsPerLayer == 0)
-                        this_unitTypeID = UnitTypeID_Layer;
                     // Count MOVE.QTY grouped on ActionChargeCode
                     if (stock_row != null)
                     {
@@ -910,65 +807,59 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                                 arc_stat.Quantity += Convert.ToInt32(qty);
                             }
                             else if (this_unitTypeID == UnitTypeID_Pallet)
+                            {
                                 arc_stat.Quantity += 1;
-                            else if (this_unitTypeID == UnitTypeID_Layer)
-                                arc_stat.Quantity += (int)sm.MOVE_QTY.Value / stock_row.ItemsPerLayer;
                             }
+                        }
                         else
                         {
-                            failedErrorMessage = "OrderDataHolder Process Pick: No Action Charge Code was found for pick stock row: " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + PaperlessOrderNumber;
-                            logger.Error(failedErrorMessage);
-                            return false;
+                            // Error....
                         }
                     }
-                    else
-                    {
-                        failedErrorMessage = "OrderDataHolder Process Pick: No pick stock row was found: " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + PaperlessOrderNumber;
-                        logger.Error(failedErrorMessage);
-                        return false;
-                    }
+                }
+                else
+                {
+                    // Error....
                 }
                 #endregion
             }
-            return true;
+
         }
 
-        public bool Process_HandleOut()
+        public void Process_HandleOut()
         {
             #region Check that total rows and pallets are what we expect
             PalletCountFromTruckLoad = 0;
+            int RowCount = 0;
             bool rfPalTypeIsN = ListTruckLoadDW.Any(x => x.RF_PAL_TYPE_ENTERED != "" && x.RF_PAL_TYPE_ENTERED.Trim() == "N");
 
             int paltype_counted = 0;
             foreach (TRUCK_LOAD_DW tl_dw in ListTruckLoadDW)
             {
+                RowCount++;
                 if (!rfPalTypeIsN && Int32.TryParse(tl_dw.RF_PAL_TYPE_COUNTED, out paltype_counted))
                     PalletCountFromTruckLoad += paltype_counted;
             }
+
+            if (RowCount != ListTruckLoadDW.Count)
+            {
+                // Error....
+            }
             #endregion
 
-            if (PickHeadDW.PAL_TYPE_ENTERED != "" && PickHeadDW.PAL_TYPE_ENTERED.Trim() != "N")
-            {
-                // PAL_TYPE_COUNTED is a string?; whilst supposed to contain int can contain decimal eg 11.7; We'll take the int part.
-                if (Decimal.TryParse(PickHeadDW.PAL_TYPE_COUNTED, out Decimal tempDec))
-                {
-                    PalletCountFromPickHead = (int)tempDec;
-                }
-            }
 
             #region Wrap out
-            // pretend named order consolidation
-            if (ZoneProcessing != null && !ZoneProcessing.IsCartonConsolidation)
+            if (!rfPalTypeIsN && ZoneProcessing != null && !ZoneProcessing.IsCartonConsolidation)
             {
-                if (PalletCountFromPickHead > Pick_FullPalletCount)
+                if (PalletCountFromTruckLoad > Pick_FullPalletCount)
                 {
                     // We must have consolidated some cartons onto pallets and
                     // wrapped; charge a wrap out for the difference
-                    WrapOut_Pal = PalletCountFromPickHead - Pick_FullPalletCount;
+                    WrapOut_Pal = PalletCountFromTruckLoad - Pick_FullPalletCount;
                 }
                 else
                 {
-                    if (PalletCountFromPickHead == Pick_FullPalletCount && PalletCountFromPickHead > 0 && Pick_CartonCount > 0)
+                    if (PalletCountFromTruckLoad == Pick_FullPalletCount && PalletCountFromTruckLoad > 0 && Pick_CartonCount > 0)
                     {
                         // We will assume there is 1 wrap, there has to be a pallet going out on the truck though, otherwise no wrap occurred
                         WrapOut_Pal = 1;
@@ -983,7 +874,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
 
             if (ZoneProcessing != null)
             {
-                // pretend named order consolidation
                 if (ZoneProcessing.IsCartonConsolidation)
                 {
                     // cartons are individually labeled
@@ -992,33 +882,94 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                 else
                 {
                     // Assume this is what we loaded out
-                    if (PalletCountFromPickHead > 0)
-                        ConnoteLabelCount = PalletCountFromPickHead;
-                    else
-                        ConnoteLabelCount = Convert.ToInt32(Pick_TotalCartonCount);
+                    ConnoteLabelCount = PalletCountFromTruckLoad;
                 }
             }
             else
             {
                 // Assume this is what we loaded out
-                if (PalletCountFromPickHead > 0)
-                    ConnoteLabelCount = PalletCountFromPickHead;
-                else
-                    ConnoteLabelCount = Convert.ToInt32(Pick_TotalCartonCount);
+                ConnoteLabelCount = PalletCountFromTruckLoad;
             }
+
+
             #endregion
 
-            return CalculateHandleOut();
+            CalculateHandleOut();
+
         }
 
-        private bool CalculateHandleOut()
+        private void CalculateHandleOut()
         {
             if (ZoneProcessing != null)
             {
-                // pretend named order consolidation
                 if (ZoneProcessing.IsCartonConsolidation)
                 {
-                    // if carton consolidation don't generate load out charges
+                    #region Carton Consolidation
+                    // Pallets are broken down into cartons and each carton is a handleout
+                    Stock.dbRow stock_row = null;
+                    int this_quantity = 0;
+                    Boolean IsPick = false;
+
+                    foreach (STOCK_MOVE_DW sm in ListStockMoveDW)
+                    {
+                        #region Calculate Handle out charges
+
+                        IsPick = false;
+
+                        switch (sm.MOVE_TYPE)
+                        {
+                            case "FULL.PICK":
+                                IsPick = true;
+                                break;
+                            case "PART.PCK":
+                                IsPick = true;
+                                break;
+                            default:
+                                // Is not a pick
+                                break;
+                        }
+
+                        if (IsPick)
+                        {
+                            if (sm.MOVE_QTY.HasValue)
+                                this_quantity = Convert.ToInt32(sm.MOVE_QTY.Value);
+                            else
+                                this_quantity = 0;
+
+                            stock_row = GetStockRow(sm.PRODUCT_CODE);
+                            // Count MOVE.QTY grouped on ActionChargeCode
+                            if (stock_row != null && this_quantity > 0)
+                            {
+                                string ActionChargeCode = GetActionChargeCode(stock_row, ActionTypeID_LoadOut, UnitTypeID_Carton);
+
+                                if (ActionChargeCode != null)
+                                {
+                                    ActionRateCodeStat arc_stat = null;
+                                    if (DictActionRateCodeStat.ContainsKey(ActionChargeCode))
+                                    {
+                                        arc_stat = DictActionRateCodeStat[ActionChargeCode];
+                                    }
+                                    else
+                                    {
+                                        arc_stat = new ActionRateCodeStat() { ActionTypeID = ActionTypeID_LoadOut, UnitTypeID = UnitTypeID_Carton, ActionChargeCode = ActionChargeCode };
+                                        DictActionRateCodeStat.Add(ActionChargeCode, arc_stat);
+                                    }
+
+                                    arc_stat.Quantity += this_quantity;
+                                }
+                                else
+                                {
+                                    // Error....
+                                }
+                            }
+                            else
+                            {
+                                // Error....
+                            }
+                        }
+                        #endregion
+                    }
+                    #endregion
                 }
                 else
                 {
@@ -1028,10 +979,10 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
 
                     Stock.dbRow stock_row = null;
                     Decimal qty = 0;
-                    Boolean IsLoadOut = false;
+                    Boolean IsPick = false;
 
                     int this_unitTypeID = 0;
-                    if (PalletCountFromPickHead > 0)
+                    if (PalletCountFromTruckLoad > 0)
                     {
                         this_unitTypeID = UnitTypeID_Pallet;
                         // get the action rate code of a default stock category and 0 dimensions
@@ -1052,7 +1003,7 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                             arc_stat = new ActionRateCodeStat() { ActionTypeID = ActionTypeID_LoadOut, UnitTypeID = this_unitTypeID, ActionChargeCode = ActionChargeCode };
                             DictActionRateCodeStat.Add(ActionChargeCode, arc_stat);
                         }
-                        arc_stat.Quantity += PalletCountFromPickHead;
+                        arc_stat.Quantity += PalletCountFromTruckLoad;
                     }
                     else
                     {
@@ -1061,28 +1012,24 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                         {
                             #region Calculate Handle out charges
 
-                            IsLoadOut = false;
+                            IsPick = false;
 
                             switch (sm.MOVE_TYPE)
                             {
                                 case "FULL.PICK":
-                                    IsLoadOut = true;
+                                    IsPick = true;
                                     break;
                                 case "PART.PCK":
-                                    IsLoadOut = true;
+                                    IsPick = true;
                                     break;
                                 default:
                                     // Is not a pick
                                     break;
                             }
 
-                            if (IsLoadOut)
+                            if (IsPick)
                             {
                                 stock_row = GetStockRow(sm.PRODUCT_CODE);
-                                // need to check if it is a carton pick with an exact multiple of a pick layer since then we charge layer
-                                if (sm.MOVE_QTY.HasValue && sm.MOVE_QTY.Value > 0 && stock_row.LayerPickEligible && sm.MOVE_QTY.Value % stock_row.ItemsPerLayer == 0)
-                                    this_unitTypeID = UnitTypeID_Layer;
-                                else
                                 this_unitTypeID = UnitTypeID_Carton;
 
                                 // Count MOVE.QTY grouped on ActionChargeCode
@@ -1107,16 +1054,12 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                                     }
                                     else
                                     {
-                                        failedErrorMessage = "OrderDataHolder Calculate Handle Out Zone Processing: No Action Charge Code was found for load out stock row: " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + PaperlessOrderNumber;
-                                        logger.Error(failedErrorMessage);
-                                        return false;
+                                        // Error....
                                     }
                                 }
                                 else
                                 {
-                                    failedErrorMessage = "OrderDataHolder Calculate Handle Out Zone Processing: No load out stock row was found: " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + PaperlessOrderNumber;
-                                    logger.Error(failedErrorMessage);
-                                    return false;
+                                    // Error....
                                 }
                             }
                             #endregion
@@ -1134,24 +1077,23 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
 
                 Stock.dbRow stock_row = null;
                 Decimal qty = 0;
-                Boolean IsLoadOut = false;
+                Boolean IsPick = false;
 
                 int this_unitTypeID = 0;
                 foreach (STOCK_MOVE_DW sm in ListStockMoveDW)
                 {
                     #region Calculate Handle out charges
 
-                    IsLoadOut = false;
+                    IsPick = false;
 
                     switch (sm.MOVE_TYPE)
                     {
                         case "FULL.PICK":
-                            IsLoadOut = true;
+                            IsPick = true;
                             this_unitTypeID = UnitTypeID_Pallet;
-                            //PalletCountFromTruckLoad++;
                             break;
                         case "PART.PCK":
-                            IsLoadOut = true;
+                            IsPick = true;
                             this_unitTypeID = UnitTypeID_Carton;
                             break;
                         default:
@@ -1159,16 +1101,13 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                             break;
                     }
 
-                    if (IsLoadOut)
+                    if (IsPick)
                     {
                         stock_row = GetStockRow(sm.PRODUCT_CODE);
 
                         // Count MOVE.QTY grouped on ActionChargeCode
                         if (stock_row != null)
                         {
-                            // need to check if it is a carton pick with an exact multiple of a pick layer since then we charge layer
-                            if (this_unitTypeID == UnitTypeID_Carton && sm.MOVE_QTY.HasValue && sm.MOVE_QTY.Value > 0 && stock_row.LayerPickEligible && sm.MOVE_QTY.Value % stock_row.ItemsPerLayer == 0)
-                                this_unitTypeID = UnitTypeID_Layer;
                             string ActionChargeCode = GetActionChargeCode(stock_row, ActionTypeID_LoadOut, this_unitTypeID);
 
                             if (ActionChargeCode != null)
@@ -1189,35 +1128,25 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
                                     arc_stat.Quantity += Convert.ToInt32(qty);
                                 }
                                 else if (this_unitTypeID == UnitTypeID_Pallet)
+                                {
                                     arc_stat.Quantity += 1;
-                                else if (this_unitTypeID == UnitTypeID_Layer)
-                                    arc_stat.Quantity += (int) sm.MOVE_QTY.Value / stock_row.ItemsPerLayer;
+                                }
                             }
                             else
                             {
-                                failedErrorMessage = "OrderDataHolder Calculate Handle Out: No Action Charge Code was found for load out stock row: " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + PaperlessOrderNumber;
-                                logger.Error(failedErrorMessage);
-                                return false;
+                                // Error....
                             }
                         }
                         else
                         {
-                            failedErrorMessage = "OrderDataHolder Calculate Handle Out: No load out stock row was found: " + sm.PRODUCT_CODE + ", " + sm.MOVE_TYPE + ", " + PaperlessOrderNumber;
-                            logger.Error(failedErrorMessage);
-                            return false;
+                            // Error....
                         }
-                    }
-                    else
-                    {
-                        failedErrorMessage = "OrderDataHolder Calculate Handle Out: stock move type was not a load out: " + sm.MOVE_TYPE + ", " + PaperlessOrderNumber;
-                        logger.Error(failedErrorMessage);
-                        return false;
                     }
                     #endregion
                 }
                 #endregion
             }
-            return true;
+
         }
 
         #endregion
@@ -1343,27 +1272,6 @@ namespace WBM_BackgroundProcessor.Models.DataHolders
             else
                 return null;
 
-        }
-
-        private ChargeDetails GetRateCollectionRateCodeIDRateChargeCodeDescription(int RateFunctionID, string RateChargeCode = null)
-        {
-            RateCollection.dbRow rc;
-
-            if (RateFunctionID > 0)
-                rc = ListRateCollection.FirstOrDefault(r => r.RateFunctionID == RateFunctionID);
-            else
-                rc = ListRateCollection.FirstOrDefault(r => r.RateChargeCode == RateChargeCode);
-
-            if (rc != null)
-                return new ChargeDetails(rc.RateCodeID, rc.RateChargeCode, rc.Description);
-            else
-            {
-                if (RateFunctionID > 0)
-                    return new ChargeDetails(0, "Not Found: " + RateFunctionID.ToString(), "Not Found: " + RateFunctionID.ToString());
-                else
-                    return new ChargeDetails(0, "Not Found: " + RateChargeCode, "Not Found: " + RateChargeCode);
-
-            }
         }
     }
 }

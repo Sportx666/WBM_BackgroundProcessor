@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace WBM_BackgroundProcessor.Models.Paperless_DB
 {
@@ -6,6 +7,7 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
     {
         [Key]
         public string KEYID { get; set; }
+        [Column("SITE.NO")]
         public string SITE_NO { get; set; }
         public string PHEAD_ID { get; set; }
         public string CUST_NO { get; set; }
@@ -46,13 +48,16 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
         public string CARRIER_CODE_2 { get; set; }
         public string CARRIER_CODE_3 { get; set; }
         public string CARRIER_CODE_4 { get; set; }
-        public string CARRIER_CODE_5 { get; set; }
+        [Column("CARRIER.CODE_5")]
+        public string? CARRIER_CODE_5 { get; set; }
         public Nullable<decimal> TOT_CTN_DESP { get; set; }
         public string SP_INSTRUCTIONS { get; set; }
         public Nullable<decimal> LOOSE_CARTONS { get; set; }
         public string CUST_ST3 { get; set; }
+        [Column("DEL_INST2&3")]
         public string DEL_INST2_3 { get; set; }
-        public string C_NO_SPLIT_CTN { get; set; }
+        [Column("[NO_SPLIT_CTN")]
+        public string? C_NO_SPLIT_CTN { get; set; }
         public string TEL_NO { get; set; }
         public string INVOICE_IND { get; set; }
         public string REF_NO { get; set; }
@@ -83,7 +88,7 @@ namespace WBM_BackgroundProcessor.Models.Paperless_DB
         public Nullable<decimal> TOT_PICK_VOL { get; set; }
         public string CUST_EMAIL { get; set; }
         public string TEL_MOB_NO { get; set; }
-        public string REGION_CODE { get; set; }
+        public string? REGION_CODE { get; set; }
         public string NO_SPLIT_CTN { get; set; }
 
     }

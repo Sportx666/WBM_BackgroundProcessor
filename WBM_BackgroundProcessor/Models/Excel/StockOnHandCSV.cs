@@ -1,6 +1,6 @@
 ﻿using CsvHelper.Configuration.Attributes;
 
-namespace WBM_BackgroundProcessor.Models.Csv
+namespace WBM_BackgroundProcessor.Models.Excel
 {
     // One line of the stock on hand CSV (RP_<Site>_CSR2_..._<ddMMyyHHmmss>.csv).
     // Only the columns we save are mapped, the rest of the file is ignored.

@@ -2,7 +2,7 @@
 using NLog;
 using NLog.Web;
 using WBM_BackgroundProcessor.DataLookups;
-using WBM_BackgroundProcessor.Models;using wbm_common.NonDatabaseObjects;
+using WBM_BackgroundProcessor.Models;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 using wbm_common.DataObjects;
 
@@ -169,7 +169,7 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 CurrentCustAdd.dbRow_instance.CompanyID = CurrentCompanyID;
                 CurrentCustAdd.dbRow_instance.OwnerID = CurrentOwnerID;
                 CurrentCustAdd.dbRow_instance.SiteID = CurrentSiteID;
-                CurrentCustAdd.dbRow_instance.CustomerID = CUSTOMER_DW.Value[0].CUST_NO ?? ""; // this is the only field that is required out of these null checks
+                CurrentCustAdd.dbRow_instance.CustomerID = CUSTOMER_DW.Value[0].CUST_NO ?? "";
                 CurrentCustAdd.dbRow_instance.Name = CUSTOMER_DW.Value[0].CUST_NAME ?? "";
                 CurrentCustAdd.dbRow_instance.AddressLine1 = CUSTOMER_DW.Value[0].CUST_ST1 ?? "";
                 CurrentCustAdd.dbRow_instance.AddressLine2 = CUSTOMER_DW.Value[0].CUST_ST2 ?? "";
@@ -178,7 +178,6 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 CurrentCustAdd.dbRow_instance.Suburb = CUSTOMER_DW.Value[0].CUST_SUB ?? "";
                 CurrentCustAdd.dbRow_instance.State = CUSTOMER_DW.Value[0].STATE ?? "";
                 CurrentCustAdd.dbRow_instance.PostCode = CUSTOMER_DW.Value[0].CUST_PCODE ?? "";
-                CurrentCustAdd.dbRow_instance.Connote_RateCollectionRateChargeCode = "";
             }
 
             private bool DoTranslations()
@@ -273,11 +272,13 @@ namespace WBM_BackgroundProcessor.Polling.PaperlessPolling
                 tododbrow.CreatedDateTime = now;
                 tododbrow.CreatedMethod = "WBM_CA_MToDo";
                 tododbrow.CreatedUserID = GS.selfUserID;
+                tododbrow.Created_UserPublicID = GS.selfUserPublicID;
                 tododbrow.Description = "New Customer " + (CUSTOMER_DW.Value[0].CUST_NAME ?? "") + " for " + Owner;
                 tododbrow.EventDateTime = now;
                 tododbrow.LastAmendedDateTime = now;
                 tododbrow.LastAmendedMethod = "WBM_CA_MToDo";// all these rows have limited characters so truncate where you can
                 tododbrow.LastAmendedUserID = GS.selfUserID;
+                tododbrow.LastAmended_UserPublicID = GS.selfUserPublicID;
                 tododbrow.Note = "Please check Pallet Hire Days, Invoice Enclosed";
                 tododbrow.OwnerID = CurrentOwnerID;
                 tododbrow.SiteID = CurrentSiteID;

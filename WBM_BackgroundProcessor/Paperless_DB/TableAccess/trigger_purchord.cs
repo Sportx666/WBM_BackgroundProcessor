@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using WBM_BackgroundProcessor.Models;using wbm_common.NonDatabaseObjects;
+using WBM_BackgroundProcessor.Models;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 
 namespace WBM_BackgroundProcessor.Paperless_DB

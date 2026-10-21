@@ -1,12 +1,12 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using WBM_BackgroundProcessor.Models;using wbm_common.NonDatabaseObjects;
+using WBM_BackgroundProcessor.Models;
 using WBM_BackgroundProcessor.Models.Paperless_DB;
 
 namespace WBM_BackgroundProcessor.Paperless_DB
 {
     public partial class PaperlessDatabase
     {
-        public async Task<Result<List<STOCK_MOVE_DW>>> STOCK_MOVE_DW_ListByInvNoOrOrdNo(string InvNo)
+        public async Task<Result<List<STOCK_MOVE_DW>>> STOCK_MOVE_DW_ListByInvNoStartsWith(string InvNo)
         {
             try
             {

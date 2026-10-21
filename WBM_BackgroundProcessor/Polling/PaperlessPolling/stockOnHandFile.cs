@@ -5,11 +5,11 @@ using NLog;
 using NLog.Web;
 using System.Globalization;
 using WBM_BackgroundProcessor.DataLookups;
-using WBM_BackgroundProcessor.Models.Csv;
+using WBM_BackgroundProcessor.Models.Excel;
 using WBM_BackgroundProcessor.Polling.PaperlessPolling;
 using wbm_common.DataObjects;
 
-namespace WBM_BackgroundProcessor.Polling.FilePolling
+namespace WBM_BackgroundProcessor.Polling
 {
     public class stockOnHandFile
     {
