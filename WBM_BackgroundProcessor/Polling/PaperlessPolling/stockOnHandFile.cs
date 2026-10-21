@@ -30,9 +30,6 @@ namespace WBM_BackgroundProcessor.Polling
             private static Logger logger = LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
             private CommonAPI CAPI = new CommonAPI();
 
-            // Most values listed in one log line (eg unmatched bins), the rest are counted
-            private const int MaxListedInLog = 20;
-
             DateTime now = DateTime.MinValue;
             string CurrentFileName = "";
             string CurrentSite = "";
@@ -166,26 +163,21 @@ namespace WBM_BackgroundProcessor.Polling
                 Console.WriteLine(CurrentFileName + " : " + Result);
             }
 
-            // Records why the file failed; the file goes to Error and nothing from it is saved
-            private void AddFailure(string message)
-            {
-                logger.Error(LogPrefix + message);
-                failedErrorMessage += (failedErrorMessage == "" ? "" : "; ") + message;
-            }
-
             private bool ReadFileName()
             {
                 // RP_HZLM_CSR2_12345_1_201026223845.csv : 2nd part is the site, last part is the stock on hand date and time (ddMMyyHHmmss)
                 string[] FileNameParts = Path.GetFileNameWithoutExtension(CurrentFileName).Split('_');
                 if (FileNameParts.Length < 3)
                 {
-                    AddFailure("file name not in expected format RP_<Site>_..._<ddMMyyHHmmss>.csv");
+                    failedErrorMessage = "file name not in expected format RP_<Site>_..._<ddMMyyHHmmss>.csv";
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
 
                 if (!DateTime.TryParseExact(FileNameParts[FileNameParts.Length - 1], "ddMMyyHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out CurrentStockOnHandDate))
                 {
-                    AddFailure("file name date '" + FileNameParts[FileNameParts.Length - 1] + "' is not in ddMMyyHHmmss format");
+                    failedErrorMessage = "file name date '" + FileNameParts[FileNameParts.Length - 1] + "' is not in ddMMyyHHmmss format";
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
 
@@ -193,7 +185,8 @@ namespace WBM_BackgroundProcessor.Polling
                 (int, int) SiteIDCompanyID = wbm_api.GetSiteNumberCompanyID(CurrentSite);
                 if (SiteIDCompanyID.Item1 == 0 || SiteIDCompanyID.Item2 == 0)
                 {
-                    AddFailure("site '" + CurrentSite + "' from the file name was not found in WBM");
+                    failedErrorMessage = "site '" + CurrentSite + "' from the file name was not found in WBM";
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
                 CurrentSiteID = SiteIDCompanyID.Item1;
@@ -201,7 +194,8 @@ namespace WBM_BackgroundProcessor.Polling
 
                 if (!wbm_api.IsSiteActive(CurrentSiteID))
                 {
-                    AddFailure("site '" + CurrentSite + "' is not active in WBM");
+                    failedErrorMessage = "site '" + CurrentSite + "' is not active in WBM";
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
 
@@ -234,7 +228,8 @@ namespace WBM_BackgroundProcessor.Polling
                 {
                     // Includes missing columns, eg a renamed header
                     logger.Error(LogPrefix + "ReadCsv " + ex);
-                    AddFailure("CSV could not be read after " + ListCsvRow.Count() + " rows: " + ex.Message);
+                    failedErrorMessage = "CSV could not be read after " + ListCsvRow.Count() + " rows: " + ex.Message;
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
 
@@ -244,14 +239,14 @@ namespace WBM_BackgroundProcessor.Polling
                 if (EmptyBinCount > 0)
                 {
                     ListCsvRow.RemoveAll(x => string.IsNullOrEmpty(x.BinLocation));
-                    logger.Warn(LogPrefix + "skipped " + EmptyBinCount + " rows with no bin location, lines " + FormatList(EmptyBinRows.Select(x => x.LineNumber.ToString())));
+                    logger.Warn(LogPrefix + "skipped " + EmptyBinCount + " rows with no bin location, lines " + string.Join(", ", EmptyBinRows.Select(x => x.LineNumber.ToString())));
                 }
 
                 logger.Info(LogPrefix + "read " + (ListCsvRow.Count() + EmptyBinCount) + " rows, site " + CurrentSite + ", stock on hand date " + CurrentStockOnHandDate.ToString("dd/MM/yyyy HH:mm:ss"));
                 return true;
             }
 
-            // Returns false only when the file can't continue (eg the API failed); skipped rows still return true
+            // Returns false when the file can't be saved (API failed or bad data); skipped rows still return true
             private bool ProcessOwner(string OwnerCode, List<StockOnHandCsvRow> OwnerRows)
             {
                 OwnerCount++;
@@ -259,7 +254,7 @@ namespace WBM_BackgroundProcessor.Polling
                 if (CurrentOwnerID == 0)
                 {
                     SkippedOwners.Add(OwnerCode + " not found");
-                    logger.Warn(LogPrefix + "owner '" + OwnerCode + "' not found in WBM, skipped " + OwnerRows.Count() + " rows, lines " + FormatList(OwnerRows.Select(x => x.LineNumber.ToString())));
+                    logger.Warn(LogPrefix + "owner '" + OwnerCode + "' not found in WBM, skipped " + OwnerRows.Count() + " rows, lines " + string.Join(", ", OwnerRows.Select(x => x.LineNumber.ToString())));
                     return true;
                 }
                 if (!wbm_api.IsOwnerActive(CurrentOwnerID))
@@ -273,7 +268,7 @@ namespace WBM_BackgroundProcessor.Polling
                     return false;
 
                 BuildRows(OwnerCode, OwnerRows);
-                return true;
+                return failedErrorMessage == "";
             }
 
             private void BuildRows(string OwnerCode, List<StockOnHandCsvRow> OwnerRows)
@@ -329,14 +324,17 @@ namespace WBM_BackgroundProcessor.Polling
 
                 // Rows not found in WBM are skipped and logged; the file still counts as processed
                 if (MissingBins.Count() > 0)
-                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + MissingBins.Count() + " bins not found in Location for site " + CurrentSite + ": " + FormatList(MissingBins));
+                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + MissingBins.Count() + " bins not found in Location for site " + CurrentSite + ": " + string.Join(", ", MissingBins));
                 if (MissingProducts.Count() > 0)
-                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + MissingProducts.Count() + " products not found in Stock for site " + CurrentSite + ": " + FormatList(MissingProducts));
+                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + MissingProducts.Count() + " products not found in Stock for site " + CurrentSite + ": " + string.Join(", ", MissingProducts));
                 if (OwnerAlreadySaved > 0)
                     logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + OwnerAlreadySaved + " rows already saved for " + CurrentStockOnHandDate.ToString("dd/MM/yyyy HH:mm:ss"));
                 // Bad data in the file fails the whole file so it can be corrected and dropped in again
                 if (InvalidQuantities.Count() > 0)
-                    AddFailure("owner " + OwnerCode + ": " + InvalidQuantities.Count() + " rows have an invalid quantity (must be a whole number of 1 or more): " + FormatList(InvalidQuantities));
+                {
+                    failedErrorMessage = "owner " + OwnerCode + ": " + InvalidQuantities.Count() + " rows have an invalid quantity (must be a whole number of 1 or more): " + string.Join(", ", InvalidQuantities);
+                    logger.Error(LogPrefix + failedErrorMessage);
+                }
 
                 AlreadySavedCount += OwnerAlreadySaved;
                 logger.Info(LogPrefix + "owner " + OwnerCode + ": " + OwnerRows.Count() + " CSV rows -> " + OwnerRowsBuilt + " rows to save");
@@ -380,17 +378,18 @@ namespace WBM_BackgroundProcessor.Polling
                 string jsonString = JsonConvert.SerializeObject(SOH);
                 if (CAPI.FetchFromAPIWithKeyID(jsonString, "StockOnHandSaveList", ApiTimeoutSeconds) == null)
                 {
-                    string Reason = "StockOnHandSaveList failed after " + timer.Elapsed.TotalSeconds.ToString("0.0") + "s, nothing saved: " + CAPI.LastErrorMessage;
+                    string Reason = "StockOnHandSaveList failed after " + timer.Elapsed.TotalSeconds.ToString("0.0") + "s, nothing saved: " + CAPI.ErrorMessage;
 
                     // The API names the failing row as "Row N of M", point to where it came from in the file
-                    Match RowMatch = Regex.Match(CAPI.LastErrorMessage, @"Row (\d+) of \d+");
+                    Match RowMatch = Regex.Match(CAPI.ErrorMessage, @"Row (\d+) of \d+");
                     if (RowMatch.Success && int.TryParse(RowMatch.Groups[1].Value, out int RowNumber) && RowNumber >= 1 && RowNumber <= ListSaveRowSource.Count())
                         Reason += " (failing row is " + ListSaveRowSource[RowNumber - 1] + ")";
 
-                    if (CAPI.LastErrorMessage.StartsWith("Timed out"))
+                    if (CAPI.ErrorMessage.StartsWith("Timed out"))
                         Reason += ". The API may still finish the save; dropping the file in again skips any rows already saved. If it keeps timing out raise StockOnHandImport:ApiTimeoutSeconds";
 
-                    AddFailure(Reason);
+                    failedErrorMessage = Reason;
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return;
                 }
 
@@ -415,16 +414,6 @@ namespace WBM_BackgroundProcessor.Polling
                     logger.Error(Summary + " | moved to Error, nothing saved | reason: " + failedErrorMessage);
             }
 
-            // "a, b, c ... and 12 more" so long lists don't flood the log
-            private string FormatList(IEnumerable<string> Values)
-            {
-                List<string> ListValues = Values.ToList();
-                string Text = string.Join(", ", ListValues.Take(MaxListedInLog));
-                if (ListValues.Count() > MaxListedInLog)
-                    Text += " ... and " + (ListValues.Count() - MaxListedInLog) + " more";
-                return Text;
-            }
-
             string response = "";
             private bool ReadLocationsFromAPI()
             {
@@ -436,7 +425,8 @@ namespace WBM_BackgroundProcessor.Polling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "LocationSearch");
                 if (response == null)
                 {
-                    AddFailure("LocationSearch for site " + CurrentSite + " failed: " + CAPI.LastErrorMessage);
+                    failedErrorMessage = "LocationSearch for site " + CurrentSite + " failed: " + CAPI.ErrorMessage;
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
                 try
@@ -448,7 +438,8 @@ namespace WBM_BackgroundProcessor.Polling
                 catch (Exception ex)
                 {
                     logger.Error(LogPrefix + "ReadLocationsFromAPI " + ex);
-                    AddFailure("LocationSearch response for site " + CurrentSite + " could not be read: " + ex.Message);
+                    failedErrorMessage = "LocationSearch response for site " + CurrentSite + " could not be read: " + ex.Message;
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
                 logger.Info(LogPrefix + "loaded " + CurrentLocations.Count() + " locations for site " + CurrentSite);
@@ -466,7 +457,8 @@ namespace WBM_BackgroundProcessor.Polling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockSearch");
                 if (response == null)
                 {
-                    AddFailure("StockSearch for owner " + OwnerCode + " failed: " + CAPI.LastErrorMessage);
+                    failedErrorMessage = "StockSearch for owner " + OwnerCode + " failed: " + CAPI.ErrorMessage;
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
                 try
@@ -478,7 +470,8 @@ namespace WBM_BackgroundProcessor.Polling
                 catch (Exception ex)
                 {
                     logger.Error(LogPrefix + "ReadStockFromAPI " + ex);
-                    AddFailure("StockSearch response for owner " + OwnerCode + " could not be read: " + ex.Message);
+                    failedErrorMessage = "StockSearch response for owner " + OwnerCode + " could not be read: " + ex.Message;
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
                 return true;
@@ -497,7 +490,8 @@ namespace WBM_BackgroundProcessor.Polling
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockOnHandSearch");
                 if (response == null)
                 {
-                    AddFailure("StockOnHandSearch for existing rows failed: " + CAPI.LastErrorMessage);
+                    failedErrorMessage = "StockOnHandSearch for existing rows failed: " + CAPI.ErrorMessage;
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
                 try
@@ -508,7 +502,8 @@ namespace WBM_BackgroundProcessor.Polling
                 catch (Exception ex)
                 {
                     logger.Error(LogPrefix + "ReadExistingStockOnHandFromAPI " + ex);
-                    AddFailure("StockOnHandSearch response could not be read: " + ex.Message);
+                    failedErrorMessage = "StockOnHandSearch response could not be read: " + ex.Message;
+                    logger.Error(LogPrefix + failedErrorMessage);
                     return false;
                 }
                 if (ExistingStockOnHand.Count() > 0)
