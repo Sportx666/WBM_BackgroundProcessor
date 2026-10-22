@@ -15,7 +15,8 @@ namespace WBM_BackgroundProcessor.Polling
 {
     // Imports stock on hand CSV files (RP_<Site>_CSR2_..._<ddMMyyHHmmss>.csv) from a local folder.
     // Each file is saved in one API call and one database transaction: all of its rows are saved or none are.
-    //   Processed\ : rows saved; any skipped rows (empty bin, owner/bin/product not in WBM) are in the log
+    //   Processed\ : rows saved; any skipped rows (empty bin, owner/bin/product not in WBM) are in the log,
+    //                 as are zones and pallet types not in WBM (those rows are saved with ID 0)
     //   Error\     : nothing saved; the log says why. Fix the cause and drop the file in again.
     // Every log line starts with "stockOnHandFile [<file name>]" and each file ends with one summary line.
     public class stockOnHandFile
@@ -42,7 +43,10 @@ namespace WBM_BackgroundProcessor.Polling
             List<StockOnHandCsvRow> ListCsvRow = null;
             Dictionary<string, int> CurrentLocations = null;    // PublicLocationID -> LocationID for the current site
             Dictionary<string, int> CurrentStocks = null;       // ProductCode -> StockID for the current owner and site
-            HashSet<(int, int, int)> ExistingStockOnHand = null; // (OwnerID, LocationID, StockID) already saved for this site and date
+            Dictionary<string, int> CurrentZones = null;        // ZoneNumber -> ZoneProcessingID for the current site
+            Dictionary<string, int> CurrentPalletTypes = null;  // PublicID -> PalletTypeID for the current site
+            // (OwnerID, LocationID, StockID, PalletNumber, ZoneProcessingID, PalletTypeID) already saved for this site and date
+            HashSet<(int, int, int, string, int, int)> ExistingStockOnHand = null;
 
             List<StockOnHand.dbRow> ListSaveRow = null;
 
@@ -52,6 +56,8 @@ namespace WBM_BackgroundProcessor.Polling
             List<string> SkippedOwners = null;
             int UnmatchedBinLines = 0;
             int UnmatchedProductLines = 0;
+            int UnmatchedZoneLines = 0;
+            int UnmatchedPalletTypeLines = 0;
             int AlreadySavedCount = 0;
             int SavedCount = 0;
 
@@ -122,6 +128,8 @@ namespace WBM_BackgroundProcessor.Polling
                 SkippedOwners = new List<string>();
                 UnmatchedBinLines = 0;
                 UnmatchedProductLines = 0;
+                UnmatchedZoneLines = 0;
+                UnmatchedPalletTypeLines = 0;
                 AlreadySavedCount = 0;
                 SavedCount = 0;
             }
@@ -134,7 +142,7 @@ namespace WBM_BackgroundProcessor.Polling
                 ResetFileState();
                 logger.Info(LogPrefix + "started");
 
-                if (ReadFileName() && ReadCsv(filePath) && ReadLocationsFromAPI() && ReadExistingStockOnHandFromAPI())
+                if (ReadFileName() && ReadCsv(filePath) && ReadLocationsFromAPI() && ReadZonesFromAPI() && ReadPalletTypesFromAPI() && ReadExistingStockOnHandFromAPI())
                 {
                     // The file holds several owners, each owner's rows are matched separately then all are saved together
                     foreach (IGrouping<string, StockOnHandCsvRow> OwnerRows in ListCsvRow.GroupBy(x => x.Owner ?? ""))
@@ -270,27 +278,45 @@ namespace WBM_BackgroundProcessor.Polling
             {
                 List<string> MissingBins = new List<string>();
                 List<string> MissingProducts = new List<string>();
-                List<string> InvalidQuantities = new List<string>();
+                List<string> MissingZones = new List<string>();
+                List<string> MissingPalletTypes = new List<string>();
+                List<string> InvalidValues = new List<string>();
                 int OwnerAlreadySaved = 0;
                 int OwnerRowsBuilt = 0;
 
-                // Pallets with exactly the same bin and product are added together into one row
-                foreach (var BinProduct in OwnerRows.GroupBy(x => new { x.BinLocation, x.ProductCode }))
+                // Lines for the same pallet, product, bin, zone and pallet type are added together into one row
+                foreach (var PalletLines in OwnerRows.GroupBy(x => new { x.PalletNumber, x.ProductCode, x.BinLocation, x.PositionZone, x.PalletType }))
                 {
-                    string Lines = string.Join(",", BinProduct.Select(x => x.LineNumber));
-                    if (!CurrentLocations.TryGetValue(BinProduct.Key.BinLocation, out int LocationID))
+                    string Lines = string.Join(",", PalletLines.Select(x => x.LineNumber));
+                    if (!CurrentLocations.TryGetValue(PalletLines.Key.BinLocation, out int LocationID))
                     {
-                        MissingBins.Add(BinProduct.Key.BinLocation);
-                        UnmatchedBinLines += BinProduct.Count();
+                        MissingBins.Add(PalletLines.Key.BinLocation);
+                        UnmatchedBinLines += PalletLines.Count();
                         continue;
                     }
-                    if (string.IsNullOrEmpty(BinProduct.Key.ProductCode) || !CurrentStocks.TryGetValue(BinProduct.Key.ProductCode, out int StockID))
+                    if (string.IsNullOrEmpty(PalletLines.Key.ProductCode) || !CurrentStocks.TryGetValue(PalletLines.Key.ProductCode, out int StockID))
                     {
-                        MissingProducts.Add(BinProduct.Key.ProductCode ?? "");
-                        UnmatchedProductLines += BinProduct.Count();
+                        MissingProducts.Add(PalletLines.Key.ProductCode ?? "");
+                        UnmatchedProductLines += PalletLines.Count();
                         continue;
                     }
-                    if (ExistingStockOnHand.Contains((CurrentOwnerID, LocationID, StockID)))
+
+                    // Zone and pallet type not set up in WBM are saved as 0 and logged
+                    if (string.IsNullOrEmpty(PalletLines.Key.PositionZone) || !CurrentZones.TryGetValue(PalletLines.Key.PositionZone, out int ZoneProcessingID))
+                    {
+                        ZoneProcessingID = 0;
+                        MissingZones.Add(PalletLines.Key.PositionZone ?? "");
+                        UnmatchedZoneLines += PalletLines.Count();
+                    }
+                    if (string.IsNullOrEmpty(PalletLines.Key.PalletType) || !CurrentPalletTypes.TryGetValue(PalletLines.Key.PalletType, out int PalletTypeID))
+                    {
+                        PalletTypeID = 0;
+                        MissingPalletTypes.Add(PalletLines.Key.PalletType ?? "");
+                        UnmatchedPalletTypeLines += PalletLines.Count();
+                    }
+
+                    string PalletNumber = PalletLines.Key.PalletNumber ?? "";
+                    if (ExistingStockOnHand.Contains((CurrentOwnerID, LocationID, StockID, PalletNumber, ZoneProcessingID, PalletTypeID)))
                     {
                         OwnerAlreadySaved++;
                         continue;
@@ -298,7 +324,7 @@ namespace WBM_BackgroundProcessor.Polling
 
                     int Quantity = 0;
                     Boolean QuantityOK = true;
-                    foreach (StockOnHandCsvRow csvRow in BinProduct)
+                    foreach (StockOnHandCsvRow csvRow in PalletLines)
                     {
                         if (int.TryParse(csvRow.Quantity, NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out int RowQuantity))
                             Quantity += RowQuantity;
@@ -307,31 +333,92 @@ namespace WBM_BackgroundProcessor.Polling
                     }
                     if (!QuantityOK || Quantity < 1)
                     {
-                        InvalidQuantities.Add("line " + Lines + " bin " + BinProduct.Key.BinLocation + " product " + BinProduct.Key.ProductCode
-                            + " quantity '" + string.Join("+", BinProduct.Select(x => x.Quantity)) + "'");
+                        InvalidValues.Add("line " + Lines + " quantity '" + string.Join("+", PalletLines.Select(x => x.Quantity)) + "'");
                         continue;
                     }
 
-                    ListSaveRow.Add(makeNewStockOnHand(LocationID, StockID, Quantity));
+                    // Earliest use-by date and the lot it belongs to; lines without a use-by date only count if none has one
+                    DateTime? UseByDate = null;
+                    string LotNumber = PalletLines.First().LotNumber ?? "";
+                    Boolean UseByOK = true;
+                    foreach (StockOnHandCsvRow csvRow in PalletLines)
+                    {
+                        if (string.IsNullOrEmpty(csvRow.UseByDate))
+                            continue;
+                        if (!DateTime.TryParseExact(csvRow.UseByDate, "dd MMM yy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime RowUseByDate))
+                        {
+                            InvalidValues.Add("line " + csvRow.LineNumber + " use-by date '" + csvRow.UseByDate + "' (expected eg 27 OCT 26)");
+                            UseByOK = false;
+                            continue;
+                        }
+                        if (UseByDate == null || RowUseByDate < UseByDate)
+                        {
+                            UseByDate = RowUseByDate;
+                            LotNumber = csvRow.LotNumber ?? "";
+                        }
+                    }
+
+                    // Status, conversion code, weight and sizes are the same for every line of a pallet, so the first line is used
+                    StockOnHandCsvRow FirstLine = PalletLines.First();
+                    Boolean PalletOK = TryParsePalletDecimal(FirstLine.PalletWeight, out decimal PalletWeight)
+                        & TryParsePalletInt(FirstLine.PalletWidth, out int PalletWidth)
+                        & TryParsePalletInt(FirstLine.PalletDepth, out int PalletDepth)
+                        & TryParsePalletInt(FirstLine.PalletHeight, out int PalletHeight);
+                    if (!PalletOK)
+                        InvalidValues.Add("line " + FirstLine.LineNumber + " pallet weight/size '" + FirstLine.PalletWeight + "', '" + FirstLine.PalletWidth
+                            + "', '" + FirstLine.PalletDepth + "', '" + FirstLine.PalletHeight + "'");
+                    if (!UseByOK || !PalletOK)
+                        continue;
+
+                    StockOnHand.dbRow dbRow = makeNewStockOnHand(LocationID, StockID, Quantity);
+                    dbRow.PalletNumber = PalletNumber;
+                    dbRow.ZoneProcessingID = ZoneProcessingID;
+                    dbRow.Status = FirstLine.Status ?? "";
+                    dbRow.ConversionCode = FirstLine.ConversionCode ?? "";
+                    dbRow.UseByDate = UseByDate;
+                    dbRow.LotNumber = LotNumber;
+                    dbRow.PalletWeight = PalletWeight;
+                    dbRow.PalletWidth = PalletWidth;
+                    dbRow.PalletDepth = PalletDepth;
+                    dbRow.PalletHeight = PalletHeight;
+                    dbRow.PalletTypeID = PalletTypeID;
+                    ListSaveRow.Add(dbRow);
                     OwnerRowsBuilt++;
                 }
 
                 // Rows not found in WBM are skipped and logged; the file still counts as processed
                 if (MissingBins.Count() > 0)
-                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + MissingBins.Count() + " bins not found in Location for site " + CurrentSite + ": " + string.Join(", ", MissingBins));
+                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + MissingBins.Distinct().Count() + " bins not found in Location for site " + CurrentSite + ": " + string.Join(", ", MissingBins.Distinct()));
                 if (MissingProducts.Count() > 0)
-                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + MissingProducts.Count() + " products not found in Stock for site " + CurrentSite + ": " + string.Join(", ", MissingProducts));
+                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + MissingProducts.Distinct().Count() + " products not found in Stock for site " + CurrentSite + ": " + string.Join(", ", MissingProducts.Distinct()));
+                if (MissingZones.Count() > 0)
+                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": saved with ZoneProcessingID 0, zones not found for site " + CurrentSite + ": " + string.Join(", ", MissingZones.Distinct()));
+                if (MissingPalletTypes.Count() > 0)
+                    logger.Warn(LogPrefix + "owner " + OwnerCode + ": saved with PalletTypeID 0, pallet types not found for site " + CurrentSite + ": " + string.Join(", ", MissingPalletTypes.Distinct()));
                 if (OwnerAlreadySaved > 0)
                     logger.Warn(LogPrefix + "owner " + OwnerCode + ": skipped " + OwnerAlreadySaved + " rows already saved for " + CurrentStockOnHandDate.ToString("dd/MM/yyyy HH:mm:ss"));
                 // Bad data in the file fails the whole file so it can be corrected and dropped in again
-                if (InvalidQuantities.Count() > 0)
+                if (InvalidValues.Count() > 0)
                 {
-                    failedErrorMessage = "owner " + OwnerCode + ": " + InvalidQuantities.Count() + " rows have an invalid quantity (must be a whole number of 1 or more): " + string.Join(", ", InvalidQuantities);
+                    failedErrorMessage = "owner " + OwnerCode + ": " + InvalidValues.Count() + " invalid values (quantity must be a whole number of 1 or more): " + string.Join(", ", InvalidValues);
                     logger.Error(LogPrefix + failedErrorMessage);
                 }
 
                 AlreadySavedCount += OwnerAlreadySaved;
                 logger.Info(LogPrefix + "owner " + OwnerCode + ": " + OwnerRows.Count() + " CSV rows -> " + OwnerRowsBuilt + " rows to save");
+            }
+
+            // Pallet weight and sizes, eg "179.28" and "1,170"; empty means 0
+            private bool TryParsePalletDecimal(string Value, out decimal Result)
+            {
+                Result = 0;
+                return string.IsNullOrEmpty(Value) || decimal.TryParse(Value, NumberStyles.Number, CultureInfo.InvariantCulture, out Result);
+            }
+
+            private bool TryParsePalletInt(string Value, out int Result)
+            {
+                Result = 0;
+                return string.IsNullOrEmpty(Value) || int.TryParse(Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out Result);
             }
 
             private StockOnHand.dbRow makeNewStockOnHand(int LocationID, int StockID, int Quantity)
@@ -392,6 +479,7 @@ namespace WBM_BackgroundProcessor.Polling
                     + " | CSV rows " + (ListCsvRow.Count() + EmptyBinCount) + ", no bin " + EmptyBinCount
                     + " | owners " + OwnerCount + (SkippedOwners.Count() > 0 ? " (skipped " + string.Join(", ", SkippedOwners) + ")" : "")
                     + " | CSV rows with bin not in WBM " + UnmatchedBinLines + ", product not in WBM " + UnmatchedProductLines
+                    + ", zone not in WBM (saved as 0) " + UnmatchedZoneLines + ", pallet type not in WBM (saved as 0) " + UnmatchedPalletTypeLines
                     + " | rows already saved " + AlreadySavedCount + ", rows saved " + SavedCount;
 
                 if (Result == "Processed")
@@ -430,6 +518,69 @@ namespace WBM_BackgroundProcessor.Polling
                     return false;
                 }
                 logger.Info(LogPrefix + "loaded " + CurrentLocations.Count() + " locations for site " + CurrentSite);
+                return true;
+            }
+
+            private bool ReadZonesFromAPI()
+            {
+                string jsonString = JsonConvert.SerializeObject(new wbm_common.DataObjects.ZoneProcessing.Search
+                {
+                    SearchMode = wbm_common.DataObjects.ZoneProcessing.Search.SearchModeType.SingleSiteID,
+                    ListSiteID = new List<int> { CurrentSiteID }
+                });
+                response = CAPI.FetchFromAPIWithKeyID(jsonString, "ZoneProcessingSearch");
+                if (response == null)
+                {
+                    failedErrorMessage = "ZoneProcessingSearch for site " + CurrentSite + " failed, see the CommonAPI error above";
+                    logger.Error(LogPrefix + failedErrorMessage);
+                    return false;
+                }
+                try
+                {
+                    List<ZoneProcessing.dbRow> ListZone = JsonConvert.DeserializeObject<List<ZoneProcessing.dbRow>>(response);
+                    // The API also returns SiteID 0 (all sites) zones; prefer the file's own site
+                    CurrentZones = ListZone.Where(x => !x.DeletedFlag && !string.IsNullOrEmpty(x.ZoneNumber))
+                        .GroupBy(x => x.ZoneNumber).ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.SiteID == CurrentSiteID).First().ID);
+                }
+                catch (Exception ex)
+                {
+                    logger.Error(LogPrefix + "ReadZonesFromAPI " + ex);
+                    failedErrorMessage = "ZoneProcessingSearch response for site " + CurrentSite + " could not be read: " + ex.Message;
+                    logger.Error(LogPrefix + failedErrorMessage);
+                    return false;
+                }
+                logger.Info(LogPrefix + "loaded " + CurrentZones.Count() + " zones for site " + CurrentSite);
+                return true;
+            }
+
+            private bool ReadPalletTypesFromAPI()
+            {
+                string jsonString = JsonConvert.SerializeObject(new wbm_common.DataObjects.PalletType.Search
+                {
+                    SearchMode = wbm_common.DataObjects.PalletType.Search.SearchModeType.AllRecords
+                });
+                response = CAPI.FetchFromAPIWithKeyID(jsonString, "PalletTypeSearch");
+                if (response == null)
+                {
+                    failedErrorMessage = "PalletTypeSearch failed, see the CommonAPI error above";
+                    logger.Error(LogPrefix + failedErrorMessage);
+                    return false;
+                }
+                try
+                {
+                    List<PalletType.dbRow> ListPalletType = JsonConvert.DeserializeObject<List<PalletType.dbRow>>(response);
+                    // Pallet types for the file's site or SiteID 0 (all sites); prefer the file's own site
+                    CurrentPalletTypes = ListPalletType.Where(x => !x.DeletedFlag && (x.SiteID == CurrentSiteID || x.SiteID == 0) && !string.IsNullOrEmpty(x.PublicID))
+                        .GroupBy(x => x.PublicID).ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.SiteID == CurrentSiteID).First().ID);
+                }
+                catch (Exception ex)
+                {
+                    logger.Error(LogPrefix + "ReadPalletTypesFromAPI " + ex);
+                    failedErrorMessage = "PalletTypeSearch response could not be read: " + ex.Message;
+                    logger.Error(LogPrefix + failedErrorMessage);
+                    return false;
+                }
+                logger.Info(LogPrefix + "loaded " + CurrentPalletTypes.Count() + " pallet types for site " + CurrentSite);
                 return true;
             }
 
@@ -489,7 +640,7 @@ namespace WBM_BackgroundProcessor.Polling
                 try
                 {
                     List<StockOnHand.dbRow> ListExisting = JsonConvert.DeserializeObject<List<StockOnHand.dbRow>>(response);
-                    ExistingStockOnHand = ListExisting.Select(x => (x.OwnerID, x.LocationID, x.StockID)).ToHashSet();
+                    ExistingStockOnHand = ListExisting.Select(x => (x.OwnerID, x.LocationID, x.StockID, x.PalletNumber ?? "", x.ZoneProcessingID, x.PalletTypeID)).ToHashSet();
                 }
                 catch (Exception ex)
                 {
