@@ -590,6 +590,8 @@ namespace WBM_BackgroundProcessor.Polling
                 {
                     SearchMode = wbm_common.DataObjects.Stock.Search.SearchModeType.Owner_ListProductCode,
                     ListOwnerID = new List<int> { CurrentOwnerID },
+                    // The API's Owner_ListProductCode search ignores ListSiteID; the site is filtered below
+                    ListSiteID = new List<int> { CurrentSiteID, 0 },
                     // Stock.ProductCode holds the owner code in front of the product, eg 02300 + 108842 = 02300108842
                     ListProductCode = OwnerRows.Select(x => x.ProductCode).Where(x => !string.IsNullOrEmpty(x)).Distinct().Select(x => OwnerCode + x).ToList()
                 });
@@ -607,9 +609,9 @@ namespace WBM_BackgroundProcessor.Polling
                     CurrentStocks = ListStock.Where(x => !x.DeletedFlag && (x.SiteID == CurrentSiteID || x.SiteID == 0) && !string.IsNullOrEmpty(x.ProductCode))
                         .GroupBy(x => x.ProductCode).ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.SiteID == CurrentSiteID).First().ID);
 
-                    int OtherSiteCount = ListStock.Where(x => !x.DeletedFlag && x.SiteID != CurrentSiteID && x.SiteID != 0).Select(x => x.ProductCode).Distinct().Count();
-                    logger.Info(LogPrefix + "owner " + OwnerCode + ": " + CurrentStocks.Count() + " of " + OwnerRows.Select(x => x.ProductCode).Distinct().Count()
-                        + " products found in Stock for site " + CurrentSite + (OtherSiteCount > 0 ? ", " + OtherSiteCount + " more only set up for another site" : ""));
+                    List<string> CsvProducts = OwnerRows.Select(x => x.ProductCode).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
+                    logger.Info(LogPrefix + "owner " + OwnerCode + ": " + CurrentStocks.Count() + " products in Stock for site " + CurrentSite + ", "
+                        + CsvProducts.Count(x => CurrentStocks.ContainsKey(OwnerCode + x)) + " of the file's " + CsvProducts.Count() + " products found");
                 }
                 catch (Exception ex)
                 {
