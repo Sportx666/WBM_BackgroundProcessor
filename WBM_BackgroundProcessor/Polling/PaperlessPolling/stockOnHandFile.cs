@@ -358,7 +358,7 @@ namespace WBM_BackgroundProcessor.Polling
                         }
                     }
 
-                    // Status, conversion code, weight and sizes are the same for every line of a pallet, so the first line is used
+                    // Status, weight and sizes are the same for every line of a pallet, so the first line is used
                     StockOnHandCsvRow FirstLine = PalletLines.First();
                     Boolean PalletOK = TryParsePalletDecimal(FirstLine.PalletWeight, out decimal PalletWeight)
                         & TryParsePalletInt(FirstLine.PalletWidth, out int PalletWidth)
@@ -374,7 +374,6 @@ namespace WBM_BackgroundProcessor.Polling
                     dbRow.PalletNumber = PalletNumber;
                     dbRow.ZoneProcessingID = ZoneProcessingID;
                     dbRow.Status = FirstLine.Status ?? "";
-                    dbRow.ConversionCode = FirstLine.ConversionCode ?? "";
                     dbRow.UseByDate = UseByDate;
                     dbRow.LotNumber = LotNumber;
                     dbRow.PalletWeight = PalletWeight;

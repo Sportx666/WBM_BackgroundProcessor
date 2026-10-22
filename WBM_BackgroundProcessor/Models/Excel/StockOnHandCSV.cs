@@ -27,9 +27,6 @@ namespace WBM_BackgroundProcessor.Models.Excel
         [Name("Status")]
         public string Status { get; set; }
 
-        [Name("Conversion Code")]
-        public string ConversionCode { get; set; }
-
         [Name("Use-by Date")]
         public string UseByDate { get; set; }
 
