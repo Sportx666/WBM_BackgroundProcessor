@@ -585,12 +585,11 @@ namespace WBM_BackgroundProcessor.Polling
 
             private bool ReadStockFromAPI(string OwnerCode, List<StockOnHandCsvRow> OwnerRows)
             {
-                // All of the owner's stock for the file's site, plus SiteID 0 (all sites)
                 string jsonString = JsonConvert.SerializeObject(new wbm_common.DataObjects.Stock.Search
                 {
-                    SearchMode = wbm_common.DataObjects.Stock.Search.SearchModeType.Undefined,
+                    SearchMode = wbm_common.DataObjects.Stock.Search.SearchModeType.Owner_ListProductCode,
                     ListOwnerID = new List<int> { CurrentOwnerID },
-                    ListSiteID = new List<int> { CurrentSiteID, 0 }
+                    ListProductCode = OwnerRows.Select(x => x.ProductCode).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList()
                 });
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockSearch");
                 if (response == null)
@@ -602,13 +601,13 @@ namespace WBM_BackgroundProcessor.Polling
                 try
                 {
                     List<Stock.dbRow> ListStock = JsonConvert.DeserializeObject<List<Stock.dbRow>>(response);
-                    // If a product is set up for both the site and SiteID 0, prefer the file's own site
-                    CurrentStocks = ListStock.Where(x => !string.IsNullOrEmpty(x.ProductCode))
+                    // SiteID 0 means the stock applies to all sites (as in the API's site searches); prefer the file's own site
+                    CurrentStocks = ListStock.Where(x => !x.DeletedFlag && (x.SiteID == CurrentSiteID || x.SiteID == 0) && !string.IsNullOrEmpty(x.ProductCode))
                         .GroupBy(x => x.ProductCode).ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.SiteID == CurrentSiteID).First().ID);
 
-                    List<string> CsvProducts = OwnerRows.Select(x => x.ProductCode).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
-                    logger.Info(LogPrefix + "owner " + OwnerCode + ": " + CurrentStocks.Count() + " products in Stock for site " + CurrentSite + ", "
-                        + CsvProducts.Count(x => CurrentStocks.ContainsKey(x)) + " of the file's " + CsvProducts.Count() + " products found");
+                    int OtherSiteCount = ListStock.Where(x => !x.DeletedFlag && x.SiteID != CurrentSiteID && x.SiteID != 0).Select(x => x.ProductCode).Distinct().Count();
+                    logger.Info(LogPrefix + "owner " + OwnerCode + ": " + CurrentStocks.Count() + " of " + OwnerRows.Select(x => x.ProductCode).Distinct().Count()
+                        + " products found in Stock for site " + CurrentSite + (OtherSiteCount > 0 ? ", " + OtherSiteCount + " more only set up for another site" : ""));
                 }
                 catch (Exception ex)
                 {
