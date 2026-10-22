@@ -42,7 +42,7 @@ namespace WBM_BackgroundProcessor.Polling
 
             List<StockOnHandCsvRow> ListCsvRow = null;
             Dictionary<string, int> CurrentLocations = null;    // PublicLocationID -> LocationID for the current site
-            Dictionary<string, int> CurrentStocks = null;       // ProductCode -> StockID for the current owner and site
+            Dictionary<string, int> CurrentStocks = null;       // Stock.ProductCode (owner code + product code) -> StockID for the current owner and site
             Dictionary<string, int> CurrentZones = null;        // ZoneNumber -> ZoneProcessingID for the current site
             Dictionary<string, int> CurrentPalletTypes = null;  // PublicID -> PalletTypeID for the current site
             // (OwnerID, LocationID, StockID, PalletNumber, ZoneProcessingID, PalletTypeID) already saved for this site and date
@@ -294,7 +294,8 @@ namespace WBM_BackgroundProcessor.Polling
                         UnmatchedBinLines += PalletLines.Count();
                         continue;
                     }
-                    if (string.IsNullOrEmpty(PalletLines.Key.ProductCode) || !CurrentStocks.TryGetValue(PalletLines.Key.ProductCode, out int StockID))
+                    // Stock.ProductCode holds the owner code in front of the product code
+                    if (string.IsNullOrEmpty(PalletLines.Key.ProductCode) || !CurrentStocks.TryGetValue(OwnerCode + PalletLines.Key.ProductCode, out int StockID))
                     {
                         MissingProducts.Add(PalletLines.Key.ProductCode ?? "");
                         UnmatchedProductLines += PalletLines.Count();
@@ -589,7 +590,8 @@ namespace WBM_BackgroundProcessor.Polling
                 {
                     SearchMode = wbm_common.DataObjects.Stock.Search.SearchModeType.Owner_ListProductCode,
                     ListOwnerID = new List<int> { CurrentOwnerID },
-                    ListProductCode = OwnerRows.Select(x => x.ProductCode).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList()
+                    // Stock.ProductCode holds the owner code in front of the product, eg 02300 + 108842 = 02300108842
+                    ListProductCode = OwnerRows.Select(x => x.ProductCode).Where(x => !string.IsNullOrEmpty(x)).Distinct().Select(x => OwnerCode + x).ToList()
                 });
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockSearch");
                 if (response == null)
