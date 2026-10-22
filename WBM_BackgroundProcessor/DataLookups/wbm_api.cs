@@ -122,9 +122,10 @@ namespace WBM_BackgroundProcessor.DataLookups
 
                     foreach (Owner.dbRow dbrow in owners)
                     {
-                        OwnerSourceToID.Add(dbrow.SourceOwnerID, dbrow.ID);
+                        // Only active owners are looked up by code, so inactive duplicates of a code are ignored
                         if (dbrow.Active)
                         {
+                            OwnerSourceToID.Add(dbrow.SourceOwnerID, dbrow.ID);
                             ListActiveOwnerID.Add(dbrow.ID);
                             DictOwner.Add(dbrow.ID, dbrow);
                         }
