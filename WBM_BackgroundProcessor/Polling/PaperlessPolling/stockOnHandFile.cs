@@ -287,22 +287,21 @@ namespace WBM_BackgroundProcessor.Polling
                 // Lines for the same pallet, product, bin, zone and pallet type are added together into one row
                 foreach (var PalletLines in OwnerRows.GroupBy(x => new { x.PalletNumber, x.ProductCode, x.BinLocation, x.PositionZone, x.PalletType }))
                 {
+                    // The lines for this pallet, product, bin, zone and pallet type are in PalletLines; the line numbers are logged if there is a problem
                     string Lines = string.Join(",", PalletLines.Select(x => x.LineNumber));
                     if (!CurrentLocations.TryGetValue(PalletLines.Key.BinLocation, out int LocationID))
                     {
+                        LocationID = 1;
                         MissingBins.Add(PalletLines.Key.BinLocation);
-                        UnmatchedBinLines += PalletLines.Count();
-                        continue;
+                        UnmatchedBinLines += PalletLines.Count();                        
                     }
-                    // Stock.ProductCode holds the owner code in front of the product code
                     if (string.IsNullOrEmpty(PalletLines.Key.ProductCode) || !CurrentStocks.TryGetValue(OwnerCode + PalletLines.Key.ProductCode, out int StockID))
                     {
                         MissingProducts.Add(PalletLines.Key.ProductCode ?? "");
                         UnmatchedProductLines += PalletLines.Count();
-                        continue;
+                        continue;                      // row is skipped, never sent     
                     }
-
-                    // Zone and pallet type not set up in WBM are saved as 0 and logged
+                    
                     if (string.IsNullOrEmpty(PalletLines.Key.PositionZone) || !CurrentZones.TryGetValue(PalletLines.Key.PositionZone, out int ZoneProcessingID))
                     {
                         ZoneProcessingID = 0;
@@ -346,9 +345,9 @@ namespace WBM_BackgroundProcessor.Polling
                     {
                         if (string.IsNullOrEmpty(csvRow.UseByDate))
                             continue;
-                        if (!DateTime.TryParseExact(csvRow.UseByDate, "dd MMM yy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime RowUseByDate))
+                        if (!DateTime.TryParseExact(csvRow.UseByDate, "d-MMM-yy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime RowUseByDate))
                         {
-                            InvalidValues.Add("line " + csvRow.LineNumber + " use-by date '" + csvRow.UseByDate + "' (expected eg 27 OCT 26)");
+                            InvalidValues.Add("line " + csvRow.LineNumber + " use-by date '" + csvRow.UseByDate + "' (expected 27-OCT-26)");
                             UseByOK = false;
                             continue;
                         }
@@ -359,7 +358,7 @@ namespace WBM_BackgroundProcessor.Polling
                         }
                     }
 
-                    // Status, weight and sizes are the same for every line of a pallet, so the first line is used
+                    // Status, conversion code, weight and sizes are the same for every line of a pallet, so the first line is used
                     StockOnHandCsvRow FirstLine = PalletLines.First();
                     Boolean PalletOK = TryParsePalletDecimal(FirstLine.PalletWeight, out decimal PalletWeight)
                         & TryParsePalletInt(FirstLine.PalletWidth, out int PalletWidth)
@@ -590,10 +589,9 @@ namespace WBM_BackgroundProcessor.Polling
                 {
                     SearchMode = wbm_common.DataObjects.Stock.Search.SearchModeType.Owner_ListProductCode,
                     ListOwnerID = new List<int> { CurrentOwnerID },
-                    // The API's Owner_ListProductCode search ignores ListSiteID; the site is filtered below
                     ListSiteID = new List<int> { CurrentSiteID, 0 },
-                    // Stock.ProductCode holds the owner code in front of the product, eg 02300 + 108842 = 02300108842
                     ListProductCode = OwnerRows.Select(x => x.ProductCode).Where(x => !string.IsNullOrEmpty(x)).Distinct().Select(x => OwnerCode + x).ToList()
+
                 });
                 response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockSearch");
                 if (response == null)
@@ -630,10 +628,10 @@ namespace WBM_BackgroundProcessor.Polling
                 {
                     SearchMode = wbm_common.DataObjects.StockOnHand.Search.SearchModeType.Undefined,
                     ListSiteID = new List<int> { CurrentSiteID },
-                    StockOnHandDate_from = CurrentStockOnHandDate,
-                    StockOnHandDate_to = CurrentStockOnHandDate
+                    StockOnHandDate_from = CurrentStockOnHandDate.Date,
+                    StockOnHandDate_to = CurrentStockOnHandDate.Date
                 });
-                response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockOnHandSearch");
+               response = CAPI.FetchFromAPIWithKeyID(jsonString, "StockOnHandSearch");
                 if (response == null)
                 {
                     failedErrorMessage = "StockOnHandSearch for existing rows failed, see the CommonAPI error above";
