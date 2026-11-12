@@ -122,11 +122,19 @@ namespace WBM_BackgroundProcessor.DataLookups
 
                     foreach (Owner.dbRow dbrow in owners)
                     {
-                        OwnerSourceToID.Add(dbrow.SourceOwnerID, dbrow.ID);
-                        if (dbrow.Active)
+                        if (OwnerSourceToID.ContainsKey(dbrow.SourceOwnerID))
                         {
-                            ListActiveOwnerID.Add(dbrow.ID);
-                            DictOwner.Add(dbrow.ID, dbrow);
+                            logger.Warn("Duplicate SourceOwnerID found in OwnerSearch: " + dbrow.SourceOwnerID + ", skipping this entry.");
+                            continue;
+                        }
+                        else
+                        {
+                            OwnerSourceToID.Add(dbrow.SourceOwnerID, dbrow.ID);
+                            if (dbrow.Active)
+                            {
+                                ListActiveOwnerID.Add(dbrow.ID);
+                                DictOwner.Add(dbrow.ID, dbrow);
+                            }
                         }
 
                     }
