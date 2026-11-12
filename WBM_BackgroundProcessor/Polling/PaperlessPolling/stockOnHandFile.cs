@@ -21,8 +21,10 @@ namespace WBM_BackgroundProcessor.Polling
     //   in WBM but are inactive, and rows already saved for this site and date (the file was dropped in again).
     //   Saved with ID 0 and a warning: zones and pallet types blank or not in WBM.
     //   Anything else (owner, bin or product not in WBM, bad quantity, use-by date or pallet value) fails the file.
+    // Folders, all inside the import folder (StockOnHandImport:Folder, eg C:\WBM\StockOnHand, where the CSVs are dropped):
     //   Processed\ : every valid row saved
-    //   Error\     : nothing saved; <file name>.log next to it summarises why. Fix the cause and drop the file in again.
+    //   Errors\    : nothing saved. Fix the cause and drop the file in again
+    //   ErrorLogs\ : <file name>.log for each failed file, a short summary of why
     // The main log (see Nlog.config) has the details, each line starting with "stockOnHandFile [<file name>]",
     // with long lists cut short, and each file ends with one summary line.
     public class stockOnHandFile
@@ -49,7 +51,7 @@ namespace WBM_BackgroundProcessor.Polling
             int CurrentCompanyID = 0;
             int CurrentOwnerID = 0;
 
-            // Why the file failed, one short reason per entry; empty means it can be saved. Any failure sends the file to Error with nothing saved
+            // Why the file failed, one short reason per entry; empty means it can be saved. Any failure sends the file to Errors with nothing saved
             List<string> FileErrors = null;
 
             List<StockOnHandCsvRow> ListCsvRow = null;
@@ -205,10 +207,18 @@ namespace WBM_BackgroundProcessor.Polling
                 }
 
                 string Result = FileErrors.Count() == 0 ? "Processed" : "Error";
-                string MovedTo = MoveFile(filePath, Result);
                 LogSummary(Result, timer.Elapsed);
+                // The error file is written to ErrorLogs\ before the CSV is moved, so it is there even if the move fails
                 if (Result == "Error")
-                    WriteErrorSummary(Path.ChangeExtension(MovedTo, ".log"), timer.Elapsed);
+                {
+                    string ErrorLogFolder = Path.Combine(ImportFolder, "ErrorLogs");
+                    string ErrorLogPath = Path.Combine(ErrorLogFolder, Path.GetFileNameWithoutExtension(CurrentFileName) + ".log");
+                    // Same rule as MoveFile: don't overwrite the log of an earlier failure of the same file
+                    if (File.Exists(ErrorLogPath))
+                        ErrorLogPath = Path.Combine(ErrorLogFolder, Path.GetFileNameWithoutExtension(CurrentFileName) + "_" + now.ToString("yyyyMMddHHmmss") + ".log");
+                    WriteErrorSummary(ErrorLogPath, timer.Elapsed);
+                }
+                MoveFile(filePath, Result == "Processed" ? "Processed" : "Errors");
                 Console.WriteLine(CurrentFileName + " : " + Result);
             }
 
@@ -542,12 +552,12 @@ namespace WBM_BackgroundProcessor.Polling
                 else
                 {
                     // The reasons are short headings; where in the file each one is was logged above
-                    Summary.Append(" | moved to Error, nothing saved | ").Append(FileErrors.Count()).Append(FileErrors.Count() == 1 ? " reason: " : " reasons: ").Append(string.Join("; ", FileErrors));
+                    Summary.Append(" | moved to Errors, nothing saved | ").Append(FileErrors.Count()).Append(FileErrors.Count() == 1 ? " reason: " : " reasons: ").Append(string.Join("; ", FileErrors));
                     logger.Error(Summary.ToString());
                 }
             }
 
-            // <file name>.log next to a file moved to Error: a short summary of why it failed, no row data (that is in the main log)
+            // ErrorLogs\<file name>.log for a file that failed: a short summary of why, no row data (that is in the main log)
             private void WriteErrorSummary(string SummaryPath, TimeSpan Elapsed)
             {
                 StringBuilder Text = new StringBuilder();
@@ -567,6 +577,7 @@ namespace WBM_BackgroundProcessor.Polling
 
                 try
                 {
+                    Directory.CreateDirectory(Path.GetDirectoryName(SummaryPath));
                     File.WriteAllText(SummaryPath, Text.ToString());
                     logger.Info(LogPrefix + "error summary written to " + SummaryPath);
                 }
@@ -735,8 +746,7 @@ namespace WBM_BackgroundProcessor.Polling
                 return true;
             }
 
-            // Returns where the file ended up: Processed\ or Error\, or still in the import folder if the move failed
-            private string MoveFile(string filePath, string SubFolder)
+            private void MoveFile(string filePath, string SubFolder)
             {
                 try
                 {
@@ -748,13 +758,11 @@ namespace WBM_BackgroundProcessor.Polling
                         DestinationPath = Path.Combine(DestinationFolder, Path.GetFileNameWithoutExtension(CurrentFileName) + "_" + now.ToString("yyyyMMddHHmmss") + Path.GetExtension(CurrentFileName));
                     File.Move(filePath, DestinationPath);
                     LogInfo("moved to " + DestinationPath);
-                    return DestinationPath;
                 }
                 catch (Exception ex)
                 {
                     // The file stays in the import folder and is tried again next run; rows already saved are skipped then
                     logger.Error(LogPrefix + "could not be moved to " + SubFolder + ", it will be picked up again next run: " + ex);
-                    return filePath;
                 }
             }
         }
