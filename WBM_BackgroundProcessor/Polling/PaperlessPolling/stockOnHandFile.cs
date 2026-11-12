@@ -15,13 +15,16 @@ using wbm_common.DataObjects;
 namespace WBM_BackgroundProcessor.Polling
 {
     // Imports stock on hand CSV files (RP_<Site>_CSR2_..._<ddMMyyHHmmss>.csv) from a local folder.
-    // Each file is saved in one API call and one database transaction: all of its rows are saved or none are.
-    //   Processed\ : rows saved; any skipped rows (empty bin, owner/bin/product not in WBM) are listed in the report,
-    //                 as are zones and pallet types not in WBM (those rows are saved with ID 0)
-    //   Error\     : nothing saved; the report says why. Fix the cause and drop the file in again.
-    // Each file gets a report, <file name>.log, next to it in Processed\ or Error\ with every problem on its own line.
-    // The main log (see Nlog.config) has the same lines, starting with "stockOnHandFile [<file name>]", with long lists
-    // cut short, and each file ends with one summary line.
+    // No partial loads: every row is checked first and the file is saved only if all of them are valid,
+    // in one API call and one database transaction.
+    //   Left out without failing the file: rows with no bin location (not stock on hand), rows of owners that exist
+    //   in WBM but are inactive, and rows already saved for this site and date (the file was dropped in again).
+    //   Saved with ID 0 and a warning: zones and pallet types blank or not in WBM.
+    //   Anything else (owner, bin or product not in WBM, bad quantity, use-by date or pallet value) fails the file.
+    //   Processed\ : every valid row saved
+    //   Error\     : nothing saved; <file name>.log next to it summarises why. Fix the cause and drop the file in again.
+    // The main log (see Nlog.config) has the details, each line starting with "stockOnHandFile [<file name>]",
+    // with long lists cut short, and each file ends with one summary line.
     public class stockOnHandFile
     {
         public class Poll
@@ -32,7 +35,7 @@ namespace WBM_BackgroundProcessor.Polling
             private static Logger logger = LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
             private CommonAPI CAPI = new CommonAPI();
 
-            // Lists longer than this are cut short in the main log; the file's report has every item
+            // Lists longer than this are cut short in the main log
             private const int LogListLimit = 20;
 
             // Use-by dates come as eg "28 DEC 26"; the other usual layouts are accepted too. Month names match in any case, "d" takes 1 or 2 digits
@@ -49,9 +52,6 @@ namespace WBM_BackgroundProcessor.Polling
             // Why the file failed, one short reason per entry; empty means it can be saved. Any failure sends the file to Error with nothing saved
             List<string> FileErrors = null;
 
-            // Everything logged for the current file, one line each, written to the file's report once it has been moved
-            StringBuilder Report = null;
-
             List<StockOnHandCsvRow> ListCsvRow = null;
             Dictionary<string, int> CurrentLocations = null;    // PublicLocationID -> LocationID for the current site
             Dictionary<string, int> CurrentStocks = null;       // Stock.ProductCode (owner code + product code) -> StockID for the current owner and site
@@ -66,8 +66,6 @@ namespace WBM_BackgroundProcessor.Polling
             int EmptyBinCount = 0;
             int OwnerCount = 0;
             List<string> SkippedOwners = null;
-            int UnmatchedBinLines = 0;
-            int UnmatchedProductLines = 0;
             int UnmatchedZoneLines = 0;
             int UnmatchedPalletTypeLines = 0;
             int AlreadySavedCount = 0;
@@ -79,18 +77,14 @@ namespace WBM_BackgroundProcessor.Polling
             }
 
             #region Logging
-            // Each message goes to the main log and to the file's report
-
             private void LogInfo(string Message)
             {
                 logger.Info(LogPrefix + Message);
-                Report.AppendLine(Message);
             }
 
             private void LogWarn(string Message)
             {
                 logger.Warn(LogPrefix + Message);
-                Report.AppendLine("WARNING: " + Message);
             }
 
             // Records a reason the file can't be saved
@@ -98,23 +92,18 @@ namespace WBM_BackgroundProcessor.Polling
             {
                 FileErrors.Add(Message);
                 logger.Error(LogPrefix + Message);
-                Report.AppendLine("ERROR: " + Message);
             }
 
-            // A heading and its items: the main log gets one line with the first LogListLimit items, the report gets every item on its own line
+            // A heading and its items on one line of the main log, cut short after LogListLimit items
             private void LogList(LogLevel Level, string Heading, List<string> Items)
             {
                 StringBuilder Line = new StringBuilder(LogPrefix).Append(Heading).Append(": ").Append(string.Join(", ", Items.Take(LogListLimit)));
                 if (Items.Count() > LogListLimit)
-                    Line.Append(" ... and ").Append(Items.Count() - LogListLimit).Append(" more, all listed in the file's .log report");
+                    Line.Append(" ... and ").Append(Items.Count() - LogListLimit).Append(" more");
                 logger.Log(Level, Line.ToString());
-
-                Report.Append(Level == LogLevel.Error ? "ERROR: " : Level == LogLevel.Warn ? "WARNING: " : "").Append(Heading).AppendLine(":");
-                foreach (string Item in Items)
-                    Report.Append("    ").AppendLine(Item);
             }
 
-            // Bad data that fails the file: the heading is the reason, the items say where
+            // A reason the file can't be saved: the heading goes in the error summary, the items (where in the file) only in the main log
             private void FailList(string Heading, List<string> Items)
             {
                 FileErrors.Add(Heading);
@@ -177,14 +166,11 @@ namespace WBM_BackgroundProcessor.Polling
                 CurrentCompanyID = 0;
                 CurrentOwnerID = 0;
                 FileErrors = new List<string>();
-                Report = new StringBuilder();
                 ListCsvRow = new List<StockOnHandCsvRow>();
                 ListSaveRow = new List<StockOnHand.dbRow>();
                 EmptyBinCount = 0;
                 OwnerCount = 0;
                 SkippedOwners = new List<string>();
-                UnmatchedBinLines = 0;
-                UnmatchedProductLines = 0;
                 UnmatchedZoneLines = 0;
                 UnmatchedPalletTypeLines = 0;
                 AlreadySavedCount = 0;
@@ -201,8 +187,8 @@ namespace WBM_BackgroundProcessor.Polling
 
                 if (ReadFileName() && ReadCsv(filePath) && ReadLocationsFromAPI() && ReadZonesFromAPI() && ReadPalletTypesFromAPI() && ReadExistingStockOnHandFromAPI())
                 {
-                    // The file holds several owners, each owner's rows are matched separately then all are saved together.
-                    // Every owner is checked even after bad data is found, so one run lists every problem; only an API failure stops early
+                    // The file holds several owners, each owner's rows are checked separately then all are saved together, only if every row is valid.
+                    // Every owner is checked even after a problem is found, so one run lists every problem; only an API failure stops early
                     foreach (IGrouping<string, StockOnHandCsvRow> OwnerRows in ListCsvRow.GroupBy(x => x.Owner ?? ""))
                     {
                         if (!ProcessOwner(OwnerRows.Key, OwnerRows.ToList()))
@@ -221,7 +207,8 @@ namespace WBM_BackgroundProcessor.Polling
                 string Result = FileErrors.Count() == 0 ? "Processed" : "Error";
                 string MovedTo = MoveFile(filePath, Result);
                 LogSummary(Result, timer.Elapsed);
-                WriteReport(Path.ChangeExtension(MovedTo, ".log"), Result, timer.Elapsed);
+                if (Result == "Error")
+                    WriteErrorSummary(Path.ChangeExtension(MovedTo, ".log"), timer.Elapsed);
                 Console.WriteLine(CurrentFileName + " : " + Result);
             }
 
@@ -290,30 +277,30 @@ namespace WBM_BackgroundProcessor.Polling
                     return false;
                 }
 
-                // Rows with no bin location are the only rows skipped here, all statuses go in
+                // Rows with no bin location are not stock on hand and are left out; all statuses go in
                 List<StockOnHandCsvRow> EmptyBinRows = ListCsvRow.Where(x => string.IsNullOrEmpty(x.BinLocation)).ToList();
                 EmptyBinCount = EmptyBinRows.Count();
                 if (EmptyBinCount > 0)
                 {
                     ListCsvRow.RemoveAll(x => string.IsNullOrEmpty(x.BinLocation));
-                    LogList(LogLevel.Warn, "skipped " + EmptyBinCount + " rows with no bin location, lines", EmptyBinRows.Select(x => x.LineNumber.ToString()).ToList());
+                    LogList(LogLevel.Warn, "left out " + EmptyBinCount + " rows with no bin location, lines", EmptyBinRows.Select(x => x.LineNumber.ToString()).ToList());
                 }
 
                 LogInfo("read " + (ListCsvRow.Count() + EmptyBinCount) + " rows, site " + CurrentSite + ", stock on hand date " + CurrentStockOnHandDate.ToString("dd/MM/yyyy HH:mm:ss"));
                 return true;
             }
 
-            // Returns false only when the API failed; bad data is recorded in FileErrors and the next owner is still checked
+            // Returns false only when the API failed; problems are recorded in FileErrors and the next owner is still checked
             private bool ProcessOwner(string OwnerCode, List<StockOnHandCsvRow> OwnerRows)
             {
                 OwnerCount++;
                 CurrentOwnerID = wbm_api.GetOwnerID(OwnerCode);
                 if (CurrentOwnerID == 0)
                 {
-                    SkippedOwners.Add(OwnerCode + " not found");
-                    LogList(LogLevel.Warn, "owner '" + OwnerCode + "' not found in WBM, skipped " + OwnerRows.Count() + " rows, lines", OwnerRows.Select(x => x.LineNumber.ToString()).ToList());
+                    FailList("owner '" + OwnerCode + "' not found in WBM (" + OwnerRows.Count() + " rows)", OwnerRows.Select(x => "line " + x.LineNumber).ToList());
                     return true;
                 }
+                // An owner set up in WBM but inactive is left out without failing the file
                 if (!wbm_api.IsOwnerActive(CurrentOwnerID))
                 {
                     SkippedOwners.Add(OwnerCode + " inactive");
@@ -348,14 +335,12 @@ namespace WBM_BackgroundProcessor.Polling
                     if (!CurrentLocations.TryGetValue(PalletLines.Key.BinLocation, out int LocationID))
                     {
                         MissingBins.Add(PalletLines.Key.BinLocation);
-                        UnmatchedBinLines += PalletLines.Count();
                         continue;
                     }
                     // Stock.ProductCode holds the owner code in front of the product code
                     if (string.IsNullOrEmpty(PalletLines.Key.ProductCode) || !CurrentStocks.TryGetValue(OwnerCode + PalletLines.Key.ProductCode, out int StockID))
                     {
                         MissingProducts.Add(ShowValue(PalletLines.Key.ProductCode));
-                        UnmatchedProductLines += PalletLines.Count();
                         continue;
                     }
 
@@ -443,12 +428,7 @@ namespace WBM_BackgroundProcessor.Polling
                     OwnerRowsBuilt++;
                 }
 
-                // Rows not found in WBM are skipped and logged; the file still counts as processed
                 string Owner = "owner " + OwnerCode + ": ";
-                if (MissingBins.Count() > 0)
-                    LogList(LogLevel.Warn, Owner + "skipped " + MissingBins.Distinct().Count() + " bins not found in Location for site " + CurrentSite, MissingBins.Distinct().ToList());
-                if (MissingProducts.Count() > 0)
-                    LogList(LogLevel.Warn, Owner + "skipped " + MissingProducts.Distinct().Count() + " products not found in Stock for site " + CurrentSite, MissingProducts.Distinct().ToList());
                 if (MissingZones.Count() > 0)
                     LogList(LogLevel.Warn, Owner + "saved with ZoneProcessingID 0, " + MissingZones.Distinct().Count() + " zones not found for site " + CurrentSite, MissingZones.Distinct().ToList());
                 if (MissingPalletTypes.Count() > 0)
@@ -456,7 +436,11 @@ namespace WBM_BackgroundProcessor.Polling
                 if (OwnerAlreadySaved > 0)
                     LogWarn(Owner + "skipped " + OwnerAlreadySaved + " rows already saved for " + CurrentStockOnHandDate.ToString("dd/MM/yyyy HH:mm:ss"));
 
-                // Bad data in the file fails the whole file so it can be corrected and dropped in again
+                // Bins and products not in WBM, and bad data, fail the whole file so it can be corrected and dropped in again
+                if (MissingBins.Count() > 0)
+                    FailList(Owner + MissingBins.Distinct().Count() + " bins not found in Location for site " + CurrentSite, MissingBins.Distinct().ToList());
+                if (MissingProducts.Count() > 0)
+                    FailList(Owner + MissingProducts.Distinct().Count() + " products not found in Stock for site " + CurrentSite, MissingProducts.Distinct().ToList());
                 if (InvalidQuantities.Count() > 0)
                     FailList(Owner + InvalidQuantities.Count() + " invalid quantities (must be a whole number of 1 or more)", InvalidQuantities);
                 if (InvalidUseByDates.Count() > 0)
@@ -550,53 +534,45 @@ namespace WBM_BackgroundProcessor.Polling
                     .Append(", date ").Append(CurrentStockOnHandDate == DateTime.MinValue ? "?" : CurrentStockOnHandDate.ToString("dd/MM/yyyy HH:mm:ss"))
                     .Append(" | CSV rows ").Append(ListCsvRow.Count() + EmptyBinCount).Append(", no bin ").Append(EmptyBinCount)
                     .Append(" | owners ").Append(OwnerCount).Append(SkippedOwners.Count() > 0 ? " (skipped " + string.Join(", ", SkippedOwners) + ")" : "")
-                    .Append(" | CSV rows with bin not in WBM ").Append(UnmatchedBinLines).Append(", product not in WBM ").Append(UnmatchedProductLines)
-                    .Append(", zone not in WBM (saved as 0) ").Append(UnmatchedZoneLines).Append(", pallet type not in WBM (saved as 0) ").Append(UnmatchedPalletTypeLines)
+                    .Append(" | CSV rows with zone not in WBM (saved as 0) ").Append(UnmatchedZoneLines).Append(", pallet type not in WBM (saved as 0) ").Append(UnmatchedPalletTypeLines)
                     .Append(" | rows already saved ").Append(AlreadySavedCount).Append(", rows saved ").Append(SavedCount);
 
                 if (Result == "Processed")
                     logger.Info(Summary.ToString());
                 else
                 {
-                    // The reasons are short headings; their details were logged above and are in the report
+                    // The reasons are short headings; where in the file each one is was logged above
                     Summary.Append(" | moved to Error, nothing saved | ").Append(FileErrors.Count()).Append(FileErrors.Count() == 1 ? " reason: " : " reasons: ").Append(string.Join("; ", FileErrors));
                     logger.Error(Summary.ToString());
                 }
             }
 
-            // The file's report, <file name>.log next to the moved file: a readable summary then every line logged for the file
-            private void WriteReport(string ReportPath, string Result, TimeSpan Elapsed)
+            // <file name>.log next to a file moved to Error: a short summary of why it failed, no row data (that is in the main log)
+            private void WriteErrorSummary(string SummaryPath, TimeSpan Elapsed)
             {
                 StringBuilder Text = new StringBuilder();
                 Text.AppendLine("Stock on hand import: " + CurrentFileName);
-                Text.AppendLine("Run at:                 " + now.ToString("dd/MM/yyyy HH:mm:ss") + ", took " + Elapsed.TotalSeconds.ToString("0.0") + "s");
-                Text.AppendLine("Result:                 " + (Result == "Processed" ? "Processed, " + SavedCount + " rows saved" : "Error, nothing saved"));
-                if (FileErrors.Count() > 0)
-                {
-                    Text.AppendLine("Why it failed:");
-                    foreach (string Reason in FileErrors)
-                        Text.AppendLine("    " + Reason);
-                }
-                Text.AppendLine("Site:                   " + (CurrentSite == "" ? "?" : CurrentSite));
-                Text.AppendLine("Stock on hand date:     " + (CurrentStockOnHandDate == DateTime.MinValue ? "?" : CurrentStockOnHandDate.ToString("dd/MM/yyyy HH:mm:ss")));
-                Text.AppendLine("CSV rows:               " + (ListCsvRow.Count() + EmptyBinCount) + " (" + EmptyBinCount + " with no bin, skipped)");
-                Text.AppendLine("Owners:                 " + OwnerCount + (SkippedOwners.Count() > 0 ? " (skipped " + string.Join(", ", SkippedOwners) + ")" : ""));
-                Text.AppendLine("CSV rows skipped:       bin not in WBM " + UnmatchedBinLines + ", product not in WBM " + UnmatchedProductLines);
-                Text.AppendLine("CSV rows saved with 0:  zone not in WBM " + UnmatchedZoneLines + ", pallet type not in WBM " + UnmatchedPalletTypeLines);
-                Text.AppendLine("Rows already saved:     " + AlreadySavedCount);
-                Text.AppendLine("Rows saved:             " + SavedCount);
+                Text.AppendLine("Run at:              " + now.ToString("dd/MM/yyyy HH:mm:ss") + ", took " + Elapsed.TotalSeconds.ToString("0.0") + "s");
+                Text.AppendLine("Result:              Error, nothing saved");
+                Text.AppendLine("Site:                " + (CurrentSite == "" ? "?" : CurrentSite));
+                Text.AppendLine("Stock on hand date:  " + (CurrentStockOnHandDate == DateTime.MinValue ? "?" : CurrentStockOnHandDate.ToString("dd/MM/yyyy HH:mm:ss")));
+                Text.AppendLine("CSV rows:            " + (ListCsvRow.Count() + EmptyBinCount) + " (" + EmptyBinCount + " with no bin, left out)");
+                Text.AppendLine("Owners:              " + OwnerCount + (SkippedOwners.Count() > 0 ? " (left out " + string.Join(", ", SkippedOwners) + ")" : ""));
                 Text.AppendLine();
-                Text.AppendLine("Details:");
-                Text.Append(Report);
+                Text.AppendLine("Why it failed:");
+                foreach (string Reason in FileErrors)
+                    Text.AppendLine("    " + Reason);
+                Text.AppendLine();
+                Text.AppendLine("Which lines and values are affected is in the main log (Nlog.config), lines starting \"stockOnHandFile [" + CurrentFileName + "]\".");
 
                 try
                 {
-                    File.WriteAllText(ReportPath, Text.ToString());
-                    logger.Info(LogPrefix + "report written to " + ReportPath);
+                    File.WriteAllText(SummaryPath, Text.ToString());
+                    logger.Info(LogPrefix + "error summary written to " + SummaryPath);
                 }
                 catch (Exception ex)
                 {
-                    logger.Error(LogPrefix + "report could not be written to " + ReportPath + ": " + ex);
+                    logger.Error(LogPrefix + "error summary could not be written to " + SummaryPath + ": " + ex);
                 }
             }
 
@@ -778,7 +754,6 @@ namespace WBM_BackgroundProcessor.Polling
                 {
                     // The file stays in the import folder and is tried again next run; rows already saved are skipped then
                     logger.Error(LogPrefix + "could not be moved to " + SubFolder + ", it will be picked up again next run: " + ex);
-                    Report.AppendLine("ERROR: could not be moved to " + SubFolder + ", it will be picked up again next run: " + ex.Message);
                     return filePath;
                 }
             }
